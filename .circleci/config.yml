@@ -4,6 +4,10 @@ orbs:
 workflows:
   build:
     jobs:
+      - rust/format:
+          toolchain: 'stable'
+      - rust/clippy:
+          toolchain: 'stable'
       - rust/test:
           toolchain: 'stable'
 
