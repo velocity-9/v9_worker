@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use hyper::{Body, Method, Response};
 
 use crate::model::{
-    ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath,
-    DeactivateRequest, DeactivateResponse, DeactivationStatus, StatusResponse,
+    ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, DeactivateRequest,
+    DeactivateResponse, DeactivationStatus, StatusResponse,
 };
 
 #[derive(Debug)]
@@ -25,10 +25,7 @@ impl ComponentManager {
     }
 
     pub fn activate(&mut self, activate_request: ActivateRequest) -> ActivateResponse {
-        if self
-            .active_components
-            .contains_key(&activate_request.id.path)
-        {
+        if self.active_components.contains_key(&activate_request.id.path) {
             warn!(
                 "Attempt to activate already activated component ({:?}) was foiled!",
                 activate_request
@@ -46,10 +43,7 @@ impl ComponentManager {
             },
         );
 
-        info!(
-            "Successfully activated a component ({:?})",
-            activate_request
-        );
+        info!("Successfully activated a component ({:?})", activate_request);
 
         ActivateResponse {
             result: ActivationStatus::ActivationSuccessful,
@@ -58,18 +52,14 @@ impl ComponentManager {
     }
 
     pub fn deactivate(&mut self, deactivate_request: DeactivateRequest) -> DeactivateResponse {
-        if !self
-            .active_components
-            .contains_key(&deactivate_request.id.path)
-        {
+        if !self.active_components.contains_key(&deactivate_request.id.path) {
             warn!(
                 "Attempt to deactivate a non-active component ({:?}) was foiled!",
                 deactivate_request
             );
             return DeactivateResponse {
                 result: DeactivationStatus::ComponentNotFound,
-                dbg_message: "deactivation failed, since the component was not activated"
-                    .to_string(),
+                dbg_message: "deactivation failed, since the component was not activated".to_string(),
             };
         }
 
@@ -80,10 +70,7 @@ impl ComponentManager {
             .deactivate();
         self.active_components.remove(&deactivate_request.id.path);
 
-        info!(
-            "Successfully activated a component ({:?})",
-            deactivate_request
-        );
+        info!("Successfully activated a component ({:?})", deactivate_request);
 
         DeactivateResponse {
             result: DeactivationStatus::DeactivationSuccessful,

@@ -52,15 +52,9 @@ impl Into<Response<Body>> for WorkerError {
     fn into(self) -> Response<Body> {
         match self {
             // Special case the "PathNotFound" error, since it maps cleanly to a 404
-            WorkerError::PathNotFound(_) => Response::builder()
-                .status(404)
-                .body(Body::from(""))
-                .unwrap(),
+            WorkerError::PathNotFound(_) => Response::builder().status(404).body(Body::from("")).unwrap(),
             // Otherwise a 500 response is fine
-            e => Response::builder()
-                .status(500)
-                .body(Body::from(e.to_string()))
-                .unwrap(),
+            e => Response::builder().status(500).body(Body::from(e.to_string())).unwrap(),
         }
     }
 }

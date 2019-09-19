@@ -24,9 +24,8 @@ pub fn global_request_entrypoint(req: Request<Body>) -> BoxedHyperFuture {
 
     // Then get a future representing the body (this is a future, since hyper may not of received the whole body yet)
     let body_future = req.into_body().concat2().map(|c| {
-        str::from_utf8(&c)
-            .map(str::to_owned)
-            .map_err(WorkerError::from)
+        // Convert the Chunk into a rust "String", wrapping any error in our error type
+        str::from_utf8(&c).map(str::to_owned).map_err(WorkerError::from)
     });
 
     // Next we want to an operation on the body. This needs to happen in a future for two reasons
@@ -91,8 +90,12 @@ impl HttpRequestHandler {
             let path = ComponentPath::new(user, repo);
             let component = component_router.lookup_component(&path);
 
-            component
-                .map(|component_handle| {
+            component.map_or_else(
+                || {
+                    debug!("Could not find serverless component {:?}", path);
+                    Err(WorkerError::PathNotFound(path_components.join("/")))
+                },
+                |component_handle| {
                     Ok(component_handle.handle_component_call(
                         method,
                         http_verb,
@@ -100,11 +103,8 @@ impl HttpRequestHandler {
                         query,
                         body.to_string(),
                     ))
-                })
-                .unwrap_or_else(|| {
-                    debug!("Could not find serverless component {:?}", path);
-                    Err(WorkerError::PathNotFound(path_components.join("/")))
-                })
+                },
+            )
         } else {
             Err(WorkerError::PathNotFound(path_components.join("/")))
         }
@@ -112,7 +112,7 @@ impl HttpRequestHandler {
 
     fn handle_meta_request(
         &self,
-        mut component_router: MutexGuard<ComponentManager>,
+        mut component_router: MutexGuard<'_, ComponentManager>,
         route: &str,
         body: &str,
     ) -> Result<Response<Body>, WorkerError> {
@@ -120,20 +120,18 @@ impl HttpRequestHandler {
         // TODO: Validate the HTTP verb is correct
         let result_body = Body::from(match route {
             "activate" => {
-                let resp = component_router
-                    .activate(serde_json::from_str(&body).map_err(WorkerError::from)?);
+                let resp = component_router.activate(serde_json::from_str(&body).map_err(WorkerError::from)?);
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
             "deactivate" => {
-                let resp = component_router
-                    .deactivate(serde_json::from_str(&body).map_err(WorkerError::from)?);
+                let resp = component_router.deactivate(serde_json::from_str(&body).map_err(WorkerError::from)?);
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
             "status" => {
                 let resp = component_router.status();
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
-            _ => Err(WorkerError::PathNotFound("meta/".to_string() + route))?,
+            _ => return Err(WorkerError::PathNotFound("meta/".to_string() + route)),
         });
         Ok(Response::builder().status(200).body(result_body).unwrap())
     }

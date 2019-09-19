@@ -1,3 +1,10 @@
+// I'd like the most pedantic warning level
+#![warn(clippy::pedantic)]
+// But I don't care about these ones for now (most applicable since the code isn't fleshed out)
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::use_self)]
+
 #[macro_use]
 extern crate failure;
 #[macro_use]
