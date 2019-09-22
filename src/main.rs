@@ -1,5 +1,5 @@
 // I'd like the most pedantic warning level
-#![warn(clippy::pedantic)]
+#![warn(clippy::pedantic, clippy::needless_borrow)]
 // But I don't care about these ones for now (most applicable since the code isn't fleshed out)
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::needless_pass_by_value)]
@@ -8,13 +8,14 @@
 #[macro_use]
 extern crate failure;
 #[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate log;
 #[macro_use]
 extern crate serde;
 
 use std::env;
+use std::sync::Arc;
+
+use crate::request_handler::HttpRequestHandler;
 
 mod components;
 mod error;
@@ -35,10 +36,14 @@ fn main() {
         info!("running in development mode");
     }
 
-    // We don't want to hang the first REST call initializing our GLOBAL_HANDLER, so pre-initialize it
-    lazy_static::initialize(&request_handler::GLOBAL_HANDLER);
+    // Create handler to deal with HTTP requests
+    let http_request_handler = HttpRequestHandler::new();
 
-    server::start_server(development_mode, request_handler::global_request_entrypoint);
+    server::start_server(
+        development_mode,
+        Arc::new(http_request_handler),
+        request_handler::global_request_entrypoint,
+    );
 
     info!("Sever loop finished, shutting down...");
 }

@@ -1,23 +1,26 @@
 use std::str;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Arc;
 
 use hyper::rt::{Future, Stream};
 use hyper::{Body, Method, Request, Response, Uri};
 
+use parking_lot::{RwLock, RwLockWriteGuard};
+
 use crate::components::ComponentManager;
 use crate::error::WorkerError;
 use crate::model::ComponentPath;
-use crate::server::BoxedHyperFuture;
-
-lazy_static! {
-    pub static ref GLOBAL_HANDLER: HttpRequestHandler = HttpRequestHandler::new();
-}
 
 // Warning: This method is somewhat complicated, since it needs to deal with async stuff
-pub fn global_request_entrypoint(req: Request<Body>) -> BoxedHyperFuture {
+// TODO: Consider making this a method on a struct somewhere
+// TODO: Deal with panics bubbling up to this level
+pub fn global_request_entrypoint(
+    handler: Arc<HttpRequestHandler>,
+    req: Request<Body>,
+) -> impl Future<Item = Response<Body>, Error = hyper::error::Error> + Send {
     debug!("{:?}", req);
 
     // Pull the verb, uri, and query stuff out of the request
+    // (It's okay to do this, since it's all quite quick to execute)
     let http_verb = req.method().clone();
     let uri = req.uri().clone();
     let query = uri.query().unwrap_or("").to_string();
@@ -29,13 +32,15 @@ pub fn global_request_entrypoint(req: Request<Body>) -> BoxedHyperFuture {
     });
 
     // Next we want to an operation on the body. This needs to happen in a future for two reasons
-    // 1) We want to handle multiple requests at once, so we don't want to block a thread
+    // 1) We want to handle many requests at once, so we don't want to block a thread
     // 2) Hyper literally doesn't let you deal with the body unless you're inside a future context (there is no API to escape this)
     // Note: We already have a result (body_result) here, since we might get an Utf8 decode error above
-    Box::new(body_future.map(move |body_result| {
+    body_future.map(move |body_result| {
+        debug!("body = {:?}", body_result);
+
         let resp: Response<Body> = body_result
-            // Delegate to the GLOBAL_HANDLER to actually deal with this request
-            .and_then(|body| GLOBAL_HANDLER.handle(http_verb, uri, query, body))
+            // Delegate to the handler to actually deal with this request
+            .and_then(|body| handler.handle(http_verb, uri, query, body))
             .unwrap_or_else(|e| {
                 warn!("Forced to convert error {:?} into a http response", e);
                 e.into()
@@ -48,18 +53,18 @@ pub fn global_request_entrypoint(req: Request<Body>) -> BoxedHyperFuture {
         }
 
         resp
-    }))
+    })
 }
 
 #[derive(Debug)]
 pub struct HttpRequestHandler {
-    serverless_component_manager: Mutex<ComponentManager>,
+    serverless_component_manager: RwLock<ComponentManager>,
 }
 
 impl HttpRequestHandler {
-    fn new() -> HttpRequestHandler {
+    pub fn new() -> HttpRequestHandler {
         HttpRequestHandler {
-            serverless_component_manager: Mutex::new(ComponentManager::new()),
+            serverless_component_manager: RwLock::new(ComponentManager::new()),
         }
     }
 
@@ -74,14 +79,13 @@ impl HttpRequestHandler {
         // Note: All URIs start with a slash, so we skip the first entry in the split (which is always just "")
         let path_components: Vec<&str> = uri.path().split('/').skip(1).collect();
 
-        let mut component_router = self
-            .serverless_component_manager
-            .lock()
-            .map_err(|_| WorkerError::MutexPoisonedError)?;
+        if path_components[0] == "meta" && path_components.len() == 2 {
+            let component_router = self.serverless_component_manager.write();
 
-        if path_components[0] == "meta" && path_components.len() >= 2 {
-            self.handle_meta_request(component_router, path_components[1], &body)
+            self.handle_meta_request(component_router, http_verb, path_components[1], &body)
         } else if path_components[0] == "sl" && path_components.len() >= 4 {
+            let component_router = self.serverless_component_manager.read();
+
             debug!("Starting serverless request processing...");
             let user = path_components[1].to_string();
             let repo = path_components[2].to_string();
@@ -96,7 +100,7 @@ impl HttpRequestHandler {
                     Err(WorkerError::PathNotFound(path_components.join("/")))
                 },
                 |component_handle| {
-                    Ok(component_handle.handle_component_call(
+                    Ok(component_handle.lock().handle_component_call(
                         method,
                         http_verb,
                         &path_components[4..],
@@ -112,25 +116,26 @@ impl HttpRequestHandler {
 
     fn handle_meta_request(
         &self,
-        mut component_router: MutexGuard<'_, ComponentManager>,
+        mut component_router: RwLockWriteGuard<'_, ComponentManager>,
+        http_verb: Method,
         route: &str,
         body: &str,
     ) -> Result<Response<Body>, WorkerError> {
-        // TODO: Add invalid request error, and send back something other than a 500 when the JSON is invalid
-        // TODO: Validate the HTTP verb is correct
-        let result_body = Body::from(match route {
-            "activate" => {
-                let resp = component_router.activate(serde_json::from_str(&body).map_err(WorkerError::from)?);
+        let result_body = Body::from(match (route, http_verb) {
+            ("activate", Method::POST) => {
+                let resp = component_router.activate(serde_json::from_str(body));
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
-            "deactivate" => {
-                let resp = component_router.deactivate(serde_json::from_str(&body).map_err(WorkerError::from)?);
+            ("deactivate", Method::POST) => {
+                let resp = component_router.deactivate(serde_json::from_str(body));
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
-            "status" => {
+            ("status", Method::GET) => {
                 let resp = component_router.status();
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
+
+            ("activate", _) | ("deactivate", _) | ("status", _) => return Err(WorkerError::WrongMethod),
             _ => return Err(WorkerError::PathNotFound("meta/".to_string() + route)),
         });
         Ok(Response::builder().status(200).body(result_body).unwrap())
