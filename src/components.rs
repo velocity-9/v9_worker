@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use hyper::{Body, Method, Response};
 
+use parking_lot::Mutex;
+
 use crate::model::{
     ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, DeactivateRequest,
     DeactivateResponse, DeactivationStatus, StatusResponse,
@@ -9,8 +11,7 @@ use crate::model::{
 
 #[derive(Debug)]
 pub struct ComponentManager {
-    // TODO: Refactor so that multiple threads can be messing with this at the same time
-    active_components: HashMap<ComponentPath, ComponentHandle>,
+    active_components: HashMap<ComponentPath, Mutex<ComponentHandle>>,
 }
 
 impl ComponentManager {
@@ -20,11 +21,24 @@ impl ComponentManager {
         }
     }
 
-    pub fn lookup_component(&mut self, path: &ComponentPath) -> Option<&mut ComponentHandle> {
-        self.active_components.get_mut(path)
+    pub fn lookup_component(&self, path: &ComponentPath) -> Option<&Mutex<ComponentHandle>> {
+        self.active_components.get(path)
     }
 
-    pub fn activate(&mut self, activate_request: ActivateRequest) -> ActivateResponse {
+    pub fn activate(
+        &mut self,
+        activate_request: Result<ActivateRequest, serde_json::Error>,
+    ) -> ActivateResponse {
+        if let Err(e) = activate_request {
+            return ActivateResponse {
+                result: ActivationStatus::InvalidRequest,
+                dbg_message: e.to_string(),
+            };
+        }
+
+        // This is a safe unwrap, since we just checked if activate_request was in an error state
+        let activate_request = activate_request.unwrap();
+
         if self.active_components.contains_key(&activate_request.id.path) {
             warn!(
                 "Attempt to activate already activated component ({:?}) was foiled!",
@@ -38,9 +52,9 @@ impl ComponentManager {
 
         self.active_components.insert(
             activate_request.id.path.clone(),
-            ComponentHandle {
+            Mutex::new(ComponentHandle {
                 id: activate_request.id.clone(),
-            },
+            }),
         );
 
         info!("Successfully activated a component ({:?})", activate_request);
@@ -51,7 +65,20 @@ impl ComponentManager {
         }
     }
 
-    pub fn deactivate(&mut self, deactivate_request: DeactivateRequest) -> DeactivateResponse {
+    pub fn deactivate(
+        &mut self,
+        deactivate_request: Result<DeactivateRequest, serde_json::Error>,
+    ) -> DeactivateResponse {
+        if let Err(e) = deactivate_request {
+            return DeactivateResponse {
+                result: DeactivationStatus::InvalidRequest,
+                dbg_message: e.to_string(),
+            };
+        }
+
+        // This is a safe unwrap, since we just checked if activate_request was in an error state
+        let deactivate_request = deactivate_request.unwrap();
+
         if !self.active_components.contains_key(&deactivate_request.id.path) {
             warn!(
                 "Attempt to deactivate a non-active component ({:?}) was foiled!",
@@ -67,6 +94,7 @@ impl ComponentManager {
         self.active_components
             .get_mut(&deactivate_request.id.path)
             .unwrap()
+            .lock()
             .deactivate();
         self.active_components.remove(&deactivate_request.id.path);
 
@@ -78,6 +106,7 @@ impl ComponentManager {
         }
     }
 
+    // TODO: Try and just take a read lock for status / make it take &self instead of &mut self
     pub fn status(&mut self) -> StatusResponse {
         // TODO: Actually implement the status response
         warn!("Returning dummy status response, since stats are unimplemented");

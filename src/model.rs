@@ -35,6 +35,8 @@ pub enum ActivationStatus {
     FailedToFindExecutable,
     #[serde(rename = "failed-to-start")]
     FailedToStart,
+    #[serde(rename = "invalid-request")]
+    InvalidRequest,
 }
 
 #[derive(Clone, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
@@ -58,6 +60,8 @@ pub enum DeactivationStatus {
     DeactivationSuccessful,
     #[serde(rename = "failed-to-deactivate")]
     FailedToDeactivate,
+    #[serde(rename = "invalid-request")]
+    InvalidRequest,
 }
 
 #[derive(Clone, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
