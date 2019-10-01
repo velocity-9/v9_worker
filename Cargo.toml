@@ -6,10 +6,11 @@ description = "The worker node application code for the velocity-9 serverless pl
 edition = "2018"
 
 [dependencies]
-failure = { version = "0.1.5", features = ["derive"]}
+failure = { version = "0.1.5", features = ["derive"] }
 flexi_logger = "0.14.3"
 hyper = "0.12.35"
 log = "0.4.8"
 parking_lot = "0.9.0"
-serde = { version = "1.0", features = ["derive"]}
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+systemstat = "0.1.4"

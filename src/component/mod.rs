@@ -1,22 +1,37 @@
 use std::collections::HashMap;
+use std::fmt::{self, Debug, Formatter};
+use std::time::Instant;
 
 use hyper::{Body, Method, Response};
-
 use parking_lot::Mutex;
+use systemstat::{Platform, System};
 
 use crate::model::{
-    ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, DeactivateRequest,
-    DeactivateResponse, DeactivationStatus, StatusResponse,
+    ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, ComponentStatus,
+    DeactivateRequest, DeactivateResponse, DeactivationStatus, StatusResponse,
 };
+use crate::stats::StatTracker;
 
-#[derive(Debug)]
 pub struct ComponentManager {
+    system: System,
+    // Invariant: No method without exclusive access (&mut self) can lock multiple components at a time
+    // (Otherwise deadlock is possible)
     active_components: HashMap<ComponentPath, Mutex<ComponentHandle>>,
+}
+
+impl Debug for ComponentManager {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ComponentManager")
+            .field("system", &"[unable to format this]")
+            .field("active_components", &self.active_components)
+            .finish()
+    }
 }
 
 impl ComponentManager {
     pub fn new() -> ComponentManager {
         ComponentManager {
+            system: System::new(),
             active_components: HashMap::new(),
         }
     }
@@ -54,6 +69,7 @@ impl ComponentManager {
             activate_request.id.path.clone(),
             Mutex::new(ComponentHandle {
                 id: activate_request.id.clone(),
+                stat_tracker: StatTracker::default(),
             }),
         );
 
@@ -106,15 +122,33 @@ impl ComponentManager {
         }
     }
 
-    // TODO: Try and just take a read lock for status / make it take &self instead of &mut self
-    pub fn status(&mut self) -> StatusResponse {
-        // TODO: Actually implement the status response
-        warn!("Returning dummy status response, since stats are unimplemented");
+    pub fn status(&self) -> StatusResponse {
+        debug!("Processing status request by looking up system averages...");
+        let cpu_usage = f64::from(
+            self.system
+                .load_average()
+                .map(|avg| avg.one / 100.0)
+                .unwrap_or(-1.0),
+        );
+        let memory_usage = self
+            .system
+            .memory()
+            .map(|mem| 1.0 - mem.total.as_usize() as f64 / mem.free.as_usize() as f64)
+            .unwrap_or(-1.0);
+        // TODO: Actually implement network usage
+        let network_usage = -1.0;
+
+        let active_components = self
+            .active_components
+            .values()
+            .map(|component_handle| component_handle.lock().get_component_status())
+            .collect();
+
         StatusResponse {
-            cpu_usage: 0.0,
-            memory_usage: 0.0,
-            network_usage: 0.0,
-            active_components: Vec::new(),
+            cpu_usage,
+            memory_usage,
+            network_usage,
+            active_components,
         }
     }
 }
@@ -122,6 +156,7 @@ impl ComponentManager {
 #[derive(Debug)]
 pub struct ComponentHandle {
     id: ComponentId,
+    stat_tracker: StatTracker,
 }
 
 impl ComponentHandle {
@@ -133,12 +168,35 @@ impl ComponentHandle {
         _query: String,
         _body: String,
     ) -> Response<Body> {
-        // TODO: Implement component handling
+        let start = Instant::now();
+
+        // TODO: Implement component calls
         error!("Component calls not yet implemented!");
-        Response::new(Body::from("{}"))
+        let resp_code = 200;
+        let resp_body = "{}";
+        let resp = Response::builder()
+            .status(resp_code)
+            .body(Body::from(resp_body))
+            .unwrap();
+
+        let processing_duration = start.elapsed();
+        let response_bytes = resp_body.len();
+        self.stat_tracker
+            .add_stat_event(processing_duration.as_millis() as u32, response_bytes as u32);
+
+        resp
     }
 
     pub fn deactivate(&mut self) {
         warn!("Component deactivation currently a no-op...")
+    }
+
+    pub fn get_component_status(&mut self) -> ComponentStatus {
+        let component_stats = self.stat_tracker.get_component_stats();
+
+        ComponentStatus {
+            id: self.id.clone(),
+            component_stats,
+        }
     }
 }
