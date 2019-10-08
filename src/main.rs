@@ -26,7 +26,6 @@ mod error;
 mod model;
 mod request_handler;
 mod server;
-mod stats;
 
 fn main() {
     // Initialize logging

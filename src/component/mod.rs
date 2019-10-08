@@ -6,11 +6,13 @@ use hyper::{Body, Method, Response};
 use parking_lot::Mutex;
 use systemstat::{Platform, System};
 
+use crate::component::stats::StatTracker;
 use crate::model::{
     ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, ComponentStatus,
     DeactivateRequest, DeactivateResponse, DeactivationStatus, StatusResponse,
 };
-use crate::stats::StatTracker;
+
+mod stats;
 
 pub struct ComponentManager {
     system: System,
