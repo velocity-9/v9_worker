@@ -76,13 +76,21 @@ pub struct DeactivateResponse {
 }
 
 #[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]
+pub struct ComponentStats {
+    pub stat_window_seconds: f64,
+
+    pub hits: f64,
+
+    pub avg_response_bytes: f64,
+    pub avg_ms_latency: f64,
+    pub ms_latency_percentiles: Vec<f64>,
+}
+
+#[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]
 pub struct ComponentStatus {
     pub id: ComponentId,
-    pub stat_window_seconds: f64,
-    pub avg_ms_latency: f64,
-    pub p99_ms_latency: f64,
-    pub hits: f64,
-    pub avg_response_bytes: f64,
+    #[serde(flatten)]
+    pub component_stats: ComponentStats,
 }
 
 #[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]

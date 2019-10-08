@@ -3,10 +3,9 @@ use std::sync::Arc;
 
 use hyper::rt::{Future, Stream};
 use hyper::{Body, Method, Request, Response, Uri};
+use parking_lot::RwLock;
 
-use parking_lot::{RwLock, RwLockWriteGuard};
-
-use crate::components::ComponentManager;
+use crate::component::ComponentManager;
 use crate::error::WorkerError;
 use crate::model::ComponentPath;
 
@@ -80,9 +79,12 @@ impl HttpRequestHandler {
         let path_components: Vec<&str> = uri.path().split('/').skip(1).collect();
 
         if path_components[0] == "meta" && path_components.len() == 2 {
-            let component_router = self.serverless_component_manager.write();
-
-            self.handle_meta_request(component_router, http_verb, path_components[1], &body)
+            self.handle_meta_request(
+                &self.serverless_component_manager,
+                http_verb,
+                path_components[1],
+                &body,
+            )
         } else if path_components[0] == "sl" && path_components.len() >= 4 {
             let component_router = self.serverless_component_manager.read();
 
@@ -116,22 +118,22 @@ impl HttpRequestHandler {
 
     fn handle_meta_request(
         &self,
-        mut component_router: RwLockWriteGuard<'_, ComponentManager>,
+        component_router: &RwLock<ComponentManager>,
         http_verb: Method,
         route: &str,
         body: &str,
     ) -> Result<Response<Body>, WorkerError> {
         let result_body = Body::from(match (route, http_verb) {
             ("activate", Method::POST) => {
-                let resp = component_router.activate(serde_json::from_str(body));
+                let resp = component_router.write().activate(serde_json::from_str(body));
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
             ("deactivate", Method::POST) => {
-                let resp = component_router.deactivate(serde_json::from_str(body));
+                let resp = component_router.write().deactivate(serde_json::from_str(body));
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
             ("status", Method::GET) => {
-                let resp = component_router.status();
+                let resp = component_router.read().status();
                 serde_json::to_string(&resp).map_err(WorkerError::from)?
             }
 

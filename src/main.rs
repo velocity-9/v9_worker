@@ -1,9 +1,13 @@
 // I'd like the most pedantic warning level
 #![warn(clippy::pedantic, clippy::needless_borrow)]
 // But I don't care about these ones for now (most applicable since the code isn't fleshed out)
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::use_self)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::needless_pass_by_value,
+    clippy::use_self,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss
+)]
 
 #[macro_use]
 extern crate failure;
@@ -17,7 +21,7 @@ use std::sync::Arc;
 
 use crate::request_handler::HttpRequestHandler;
 
-mod components;
+mod component;
 mod error;
 mod model;
 mod request_handler;
