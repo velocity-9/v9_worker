@@ -10,7 +10,11 @@ failure = { version = "0.1.5", features = ["derive"] }
 flexi_logger = "0.14.3"
 hyper = "0.12.35"
 log = "0.4.8"
+nix = "0.15.0"
 parking_lot = "0.9.0"
+percent-encoding = "2.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+subprocess = "0.1.18"
 systemstat = "0.1.4"
+tempfile = "3.1"

@@ -21,7 +21,7 @@ struct StatEvent {
 
 impl Default for StatTracker {
     fn default() -> Self {
-        StatTracker {
+        Self {
             stat_window: DEFAULT_STAT_WINDOW,
             event_deque: VecDeque::new(),
         }

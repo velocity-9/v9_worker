@@ -1,18 +1,23 @@
+mod isolation;
+mod stats;
+
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::time::Instant;
 
 use hyper::{Body, Method, Response};
 use parking_lot::Mutex;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use systemstat::{Platform, System};
 
+use crate::component::isolation::IsolatedProcessWrapper;
 use crate::component::stats::StatTracker;
+use crate::error::WorkerError;
 use crate::model::{
-    ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, ComponentStatus,
-    DeactivateRequest, DeactivateResponse, DeactivationStatus, StatusResponse,
+    ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, ComponentRequest,
+    ComponentResponse, ComponentStatus, DeactivateRequest, DeactivateResponse, DeactivationStatus,
+    StatusResponse,
 };
-
-mod stats;
 
 pub struct ComponentManager {
     system: System,
@@ -31,8 +36,8 @@ impl Debug for ComponentManager {
 }
 
 impl ComponentManager {
-    pub fn new() -> ComponentManager {
-        ComponentManager {
+    pub fn new() -> Self {
+        Self {
             system: System::new(),
             active_components: HashMap::new(),
         }
@@ -67,10 +72,21 @@ impl ComponentManager {
             };
         }
 
+        let isolated_process_wrapper = match IsolatedProcessWrapper::new(activate_request.clone()) {
+            Ok(w) => w,
+            Err(e) => {
+                return ActivateResponse {
+                    result: ActivationStatus::FailedToStart,
+                    dbg_message: e.to_string(),
+                }
+            }
+        };
+
         self.active_components.insert(
             activate_request.id.path.clone(),
             Mutex::new(ComponentHandle {
                 id: activate_request.id.clone(),
+                component_process_wrapper: isolated_process_wrapper,
                 stat_tracker: StatTracker::default(),
             }),
         );
@@ -108,12 +124,6 @@ impl ComponentManager {
             };
         }
 
-        // This is a safe unwrap, since we just checked that the map contains this key
-        self.active_components
-            .get_mut(&deactivate_request.id.path)
-            .unwrap()
-            .lock()
-            .deactivate();
         self.active_components.remove(&deactivate_request.id.path);
 
         info!("Successfully activated a component ({:?})", deactivate_request);
@@ -135,7 +145,7 @@ impl ComponentManager {
         let memory_usage = self
             .system
             .memory()
-            .map(|mem| 1.0 - mem.total.as_usize() as f64 / mem.free.as_usize() as f64)
+            .map(|mem| 1.0 - mem.total.as_u64() as f64 / mem.free.as_u64() as f64)
             .unwrap_or(-1.0);
         // TODO: Actually implement network usage
         let network_usage = -1.0;
@@ -159,38 +169,63 @@ impl ComponentManager {
 pub struct ComponentHandle {
     id: ComponentId,
     stat_tracker: StatTracker,
+    component_process_wrapper: IsolatedProcessWrapper,
 }
 
 impl ComponentHandle {
     pub fn handle_component_call(
         &mut self,
-        _component_method: &str,
-        _http_verb: Method,
-        _additional_path_components: &[&str],
-        _query: String,
-        _body: String,
-    ) -> Response<Body> {
+        component_method: &str,
+        http_verb: &Method,
+        additional_path_components: &[&str],
+        query: String,
+        body: String,
+    ) -> Result<Response<Body>, WorkerError> {
         let start = Instant::now();
 
-        // TODO: Implement component calls
-        error!("Component calls not yet implemented!");
-        let resp_code = 200;
-        let resp_body = "{}";
+        let request = ComponentRequest {
+            called_function: component_method.to_string(),
+
+            http_method: http_verb.to_string(),
+            path: additional_path_components.join("/"),
+            request_arguments: query,
+            request_body: body,
+        };
+
+        let serialized_request = serde_json::to_string(&request)?;
+        let encoded_request = utf8_percent_encode(&serialized_request, NON_ALPHANUMERIC);
+
+        let encoded_response = self
+            .component_process_wrapper
+            .query_process(encoded_request.to_string())?;
+        let serialized_response = percent_decode_str(&encoded_response).decode_utf8()?.to_string();
+        let response: ComponentResponse = serde_json::from_str(&serialized_response)?;
+
+        debug!("Got component response {:?}", response);
+
+        if let Some(m) = response.error_message {
+            if !m.is_empty() {
+                let resp = Response::builder()
+                    .status(response.http_response_code as u16)
+                    .body(Body::from(m))
+                    .unwrap();
+                return Ok(resp);
+            }
+        }
+
+        let resp_code = response.http_response_code;
+        let resp_body = response.response_body;
+        let response_bytes = resp_body.len();
         let resp = Response::builder()
-            .status(resp_code)
+            .status(resp_code as u16)
             .body(Body::from(resp_body))
             .unwrap();
 
         let processing_duration = start.elapsed();
-        let response_bytes = resp_body.len();
         self.stat_tracker
             .add_stat_event(processing_duration.as_millis() as u32, response_bytes as u32);
 
-        resp
-    }
-
-    pub fn deactivate(&mut self) {
-        warn!("Component deactivation currently a no-op...")
+        Ok(resp)
     }
 
     pub fn get_component_status(&mut self) -> ComponentStatus {

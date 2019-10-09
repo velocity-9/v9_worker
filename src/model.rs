@@ -7,8 +7,8 @@ pub struct ComponentPath {
 }
 
 impl ComponentPath {
-    pub fn new(user: String, repo: String) -> ComponentPath {
-        ComponentPath { user, repo }
+    pub fn new(user: String, repo: String) -> Self {
+        Self { user, repo }
     }
 }
 
@@ -99,4 +99,21 @@ pub struct StatusResponse {
     pub memory_usage: f64,
     pub network_usage: f64,
     pub active_components: Vec<ComponentStatus>,
+}
+
+#[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]
+pub struct ComponentRequest {
+    pub called_function: String,
+
+    pub http_method: String,
+    pub path: String,
+    pub request_arguments: String,
+    pub request_body: String,
+}
+
+#[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]
+pub struct ComponentResponse {
+    pub response_body: String,
+    pub http_response_code: u32,
+    pub error_message: Option<String>,
 }

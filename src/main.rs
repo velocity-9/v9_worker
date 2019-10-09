@@ -3,8 +3,6 @@
 // But I don't care about these ones for now (most applicable since the code isn't fleshed out)
 #![allow(
     clippy::module_name_repetitions,
-    clippy::needless_pass_by_value,
-    clippy::use_self,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss
 )]
@@ -16,16 +14,17 @@ extern crate log;
 #[macro_use]
 extern crate serde;
 
+mod component;
+mod error;
+mod model;
+mod named_pipe;
+mod request_handler;
+mod server;
+
 use std::env;
 use std::sync::Arc;
 
 use crate::request_handler::HttpRequestHandler;
-
-mod component;
-mod error;
-mod model;
-mod request_handler;
-mod server;
 
 fn main() {
     // Initialize logging

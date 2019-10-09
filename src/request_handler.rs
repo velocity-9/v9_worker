@@ -6,7 +6,7 @@ use hyper::{Body, Method, Request, Response, Uri};
 use parking_lot::RwLock;
 
 use crate::component::ComponentManager;
-use crate::error::WorkerError;
+use crate::error::{WorkerError, WorkerErrorKind};
 use crate::model::ComponentPath;
 
 // Warning: This method is somewhat complicated, since it needs to deal with async stuff
@@ -39,7 +39,7 @@ pub fn global_request_entrypoint(
 
         let resp: Response<Body> = body_result
             // Delegate to the handler to actually deal with this request
-            .and_then(|body| handler.handle(http_verb, uri, query, body))
+            .and_then(|body| handler.handle(http_verb, &uri, query, body))
             .unwrap_or_else(|e| {
                 warn!("Forced to convert error {:?} into a http response", e);
                 e.into()
@@ -61,8 +61,8 @@ pub struct HttpRequestHandler {
 }
 
 impl HttpRequestHandler {
-    pub fn new() -> HttpRequestHandler {
-        HttpRequestHandler {
+    pub fn new() -> Self {
+        Self {
             serverless_component_manager: RwLock::new(ComponentManager::new()),
         }
     }
@@ -70,7 +70,7 @@ impl HttpRequestHandler {
     fn handle(
         &self,
         http_verb: Method,
-        uri: Uri,
+        uri: &Uri,
         query: String,
         body: String,
     ) -> Result<Response<Body>, WorkerError> {
@@ -99,20 +99,20 @@ impl HttpRequestHandler {
             component.map_or_else(
                 || {
                     debug!("Could not find serverless component {:?}", path);
-                    Err(WorkerError::PathNotFound(path_components.join("/")))
+                    Err(WorkerErrorKind::PathNotFound(path_components.join("/")).into())
                 },
                 |component_handle| {
-                    Ok(component_handle.lock().handle_component_call(
+                    component_handle.lock().handle_component_call(
                         method,
-                        http_verb,
+                        &http_verb,
                         &path_components[4..],
                         query,
-                        body.to_string(),
-                    ))
+                        body,
+                    )
                 },
             )
         } else {
-            Err(WorkerError::PathNotFound(path_components.join("/")))
+            Err(WorkerErrorKind::PathNotFound(path_components.join("/")).into())
         }
     }
 
@@ -126,19 +126,21 @@ impl HttpRequestHandler {
         let result_body = Body::from(match (route, http_verb) {
             ("activate", Method::POST) => {
                 let resp = component_router.write().activate(serde_json::from_str(body));
-                serde_json::to_string(&resp).map_err(WorkerError::from)?
+                serde_json::to_string(&resp)?
             }
             ("deactivate", Method::POST) => {
                 let resp = component_router.write().deactivate(serde_json::from_str(body));
-                serde_json::to_string(&resp).map_err(WorkerError::from)?
+                serde_json::to_string(&resp)?
             }
             ("status", Method::GET) => {
                 let resp = component_router.read().status();
-                serde_json::to_string(&resp).map_err(WorkerError::from)?
+                serde_json::to_string(&resp)?
             }
 
-            ("activate", _) | ("deactivate", _) | ("status", _) => return Err(WorkerError::WrongMethod),
-            _ => return Err(WorkerError::PathNotFound("meta/".to_string() + route)),
+            ("activate", _) | ("deactivate", _) | ("status", _) => {
+                return Err(WorkerErrorKind::WrongMethod.into())
+            }
+            _ => return Err(WorkerErrorKind::PathNotFound("meta/".to_string() + route).into()),
         });
         Ok(Response::builder().status(200).body(result_body).unwrap())
     }
