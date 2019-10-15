@@ -4,7 +4,7 @@ use std::num::TryFromIntError;
 use std::str::Utf8Error;
 
 use failure::Backtrace;
-use hyper::{Body, Response};
+use hyper::{Body, Response, StatusCode};
 use subprocess::PopenError;
 
 #[derive(Debug, Fail)]
@@ -125,18 +125,20 @@ impl Into<Response<Body>> for WorkerError {
     fn into(self) -> Response<Body> {
         match &self.kind {
             // Special case the "PathNotFound" error, since it maps cleanly to a 404
-            WorkerErrorKind::PathNotFound(_) => {
-                Response::builder().status(404).body(Body::from("")).unwrap()
-            }
+            WorkerErrorKind::PathNotFound(_) => Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from(""))
+                .unwrap(),
 
             // Also special case the "WrongMethodError" error since it maps cleanly to a 405
-            WorkerErrorKind::WrongMethod => {
-                Response::builder().status(405).body(Body::from("")).unwrap()
-            }
+            WorkerErrorKind::WrongMethod => Response::builder()
+                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .body(Body::from(""))
+                .unwrap(),
 
             // Otherwise a 500 response is fine
             _ => Response::builder()
-                .status(500)
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from(self.to_string()))
                 .unwrap(),
         }

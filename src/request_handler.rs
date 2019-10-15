@@ -2,7 +2,7 @@ use std::str;
 use std::sync::Arc;
 
 use hyper::rt::{Future, Stream};
-use hyper::{Body, Method, Request, Response, Uri};
+use hyper::{Body, Method, Request, Response, StatusCode, Uri};
 use parking_lot::RwLock;
 
 use crate::component::ComponentManager;
@@ -45,7 +45,7 @@ pub fn global_request_entrypoint(
                 e.into()
             });
 
-        if resp.status() == 400 {
+        if resp.status() == StatusCode::INTERNAL_SERVER_ERROR {
             error!("INTERNAL SERVER ERROR -- {:?}", resp);
         } else {
             debug!("{:?}", resp);
@@ -142,7 +142,10 @@ impl HttpRequestHandler {
             }
             _ => return Err(WorkerErrorKind::PathNotFound("meta/".to_string() + route).into()),
         });
-        Ok(Response::builder().status(200).body(result_body).unwrap())
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(result_body)
+            .unwrap())
     }
 
     pub fn component_manager(&self) -> &RwLock<ComponentManager> {
