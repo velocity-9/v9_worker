@@ -144,4 +144,8 @@ impl HttpRequestHandler {
         });
         Ok(Response::builder().status(200).body(result_body).unwrap())
     }
+
+    pub fn component_manager(&self) -> &RwLock<ComponentManager> {
+        &self.serverless_component_manager
+    }
 }

@@ -91,7 +91,7 @@ impl NamedPipe {
                 .custom_flags(OFlag::O_NONBLOCK.bits())
                 .open(&self.component_output_fifo_path);
 
-            debug!("Opening component output {:?}", c_out_res);
+            trace!("Opening component output {:?}", c_out_res);
 
             self.component_output_fifo_file = c_out_res.ok();
 
@@ -104,7 +104,7 @@ impl NamedPipe {
                 .custom_flags(OFlag::O_NONBLOCK.bits())
                 .open(&self.component_input_fifo_path);
 
-            debug!("Opening component input {:?}", c_in_res);
+            trace!("Opening component input {:?}", c_in_res);
 
             self.component_input_fifo_file = c_in_res.ok();
 

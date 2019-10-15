@@ -19,8 +19,12 @@ mod server;
 
 use std::env;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use crate::request_handler::HttpRequestHandler;
+
+const HEARTBEAT_PERIODICITY: Duration = Duration::from_secs(1);
 
 fn main() {
     // Initialize logging
@@ -36,11 +40,19 @@ fn main() {
     }
 
     // Create handler to deal with HTTP requests
-    let http_request_handler = HttpRequestHandler::new();
+    let http_request_handler = Arc::new(HttpRequestHandler::new());
 
+    // Create a heartbeat thread for the ComponentManager
+    let heartbeat_handler_ref = http_request_handler.clone();
+    thread::spawn(move || loop {
+        heartbeat_handler_ref.component_manager().read().heartbeat();
+        thread::sleep(HEARTBEAT_PERIODICITY);
+    });
+
+    // Start up a server to respond to REST requests
     server::start_server(
         development_mode,
-        Arc::new(http_request_handler),
+        http_request_handler,
         request_handler::global_request_entrypoint,
     );
 
