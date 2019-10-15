@@ -192,12 +192,14 @@ impl ComponentHandle {
             request_body: body,
         };
 
+        // Our communication with subprocesses has protocol calls for one percent encoded JSON per request/response
+        // We handle this deserialization here to keep it general
         let serialized_request = serde_json::to_string(&request)?;
         let encoded_request = utf8_percent_encode(&serialized_request, NON_ALPHANUMERIC);
 
         let encoded_response = self
             .component_process_wrapper
-            .query_process(encoded_request.to_string())?;
+            .query_process(&encoded_request.to_string())?;
         let serialized_response = percent_decode_str(&encoded_response).decode_utf8()?.to_string();
         let response: ComponentResponse = serde_json::from_str(&serialized_response)?;
 

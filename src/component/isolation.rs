@@ -25,7 +25,7 @@ impl IsolatedProcessWrapper {
         })
     }
 
-    pub fn query_process(&mut self, req: String) -> Result<String, WorkerError> {
+    pub fn query_process(&mut self, req: &str) -> Result<String, WorkerError> {
         if self.process_handle.is_none() {
             self.process_handle = Some(self.isolation_controller.boot_process()?)
         }
@@ -49,7 +49,7 @@ pub trait ProcessIsolationController: Debug + Send {
 }
 
 pub trait IsolatedProcessHandle: Debug + Send {
-    fn query_process(&mut self, req: String) -> Result<String, WorkerError>;
+    fn query_process(&mut self, req: &str) -> Result<String, WorkerError>;
 }
 
 #[derive(Debug)]
@@ -96,9 +96,7 @@ pub struct PythonUnsafeHandle {
 }
 
 impl IsolatedProcessHandle for PythonUnsafeHandle {
-    fn query_process(&mut self, mut req: String) -> Result<String, WorkerError> {
-        req.push('\n');
-
+    fn query_process(&mut self, req: &str) -> Result<String, WorkerError> {
         debug!("Writing {:?} to python-unsafe process", req);
         self.pipe.write(req.as_bytes())?;
         let bytes = self.pipe.read()?;
@@ -106,14 +104,5 @@ impl IsolatedProcessHandle for PythonUnsafeHandle {
         debug!("Got back {:?} from python-unsafe process", resp);
 
         Ok(resp)
-    }
-}
-
-impl Drop for PythonUnsafeHandle {
-    fn drop(&mut self) {
-        match self.subprocess.terminate() {
-            Ok(_) => {}
-            Err(e) => error!("Could not terminate process: {}", e),
-        }
     }
 }

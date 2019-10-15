@@ -41,6 +41,7 @@ impl NamedPipeCreator {
         let component_output_fifo_filename = format!("OUT_{}", pipe_num);
         let component_output_fifo_path = self.dir.path().join(component_output_fifo_filename);
 
+        // These fifos are created with 777 permissions
         mkfifo(
             &component_input_fifo_path,
             Mode::S_IRWXU | Mode::S_IRWXG | Mode::S_IRWXO,
@@ -119,12 +120,18 @@ impl NamedPipe {
         }
     }
 
+    // Precondition: No newlines in the input string
     pub fn write(&mut self, v: &[u8]) -> Result<(), WorkerError> {
+        // Passing in a newline violates the contract of this method
+        assert!(!v.contains(&b'\n'));
+
+        // Push a newline at the end to terminate the input
+        let mut v = Vec::from(v);
+        v.push(b'\n');
+
         let (c_in_fd, _) = self.get_fds()?;
 
         let deadline = Instant::now() + Duration::from_millis(PIPE_IO_TIMEOUT_MS);
-
-        assert_eq!(v.last(), Some(&b'\n'));
 
         let mut write_idx = 0;
         while write_idx < v.len() && Instant::now() < deadline {
