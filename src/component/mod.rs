@@ -2,6 +2,7 @@ mod isolation;
 mod stats;
 
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::fmt::{self, Debug, Formatter};
 use std::time::Instant;
 
@@ -205,27 +206,27 @@ impl ComponentHandle {
 
         debug!("Got component response {:?}", response);
 
+        let resp_code: u16 = response.http_response_code.try_into()?;
+
         if let Some(m) = response.error_message {
             if !m.is_empty() {
-                let resp = Response::builder()
-                    .status(response.http_response_code as u16)
-                    .body(Body::from(m))
-                    .unwrap();
+                let resp = Response::builder().status(resp_code).body(Body::from(m)).unwrap();
                 return Ok(resp);
             }
         }
 
-        let resp_code = response.http_response_code;
         let resp_body = response.response_body;
         let response_bytes = resp_body.len();
         let resp = Response::builder()
-            .status(resp_code as u16)
+            .status(resp_code)
             .body(Body::from(resp_body))
             .unwrap();
 
         let processing_duration = start.elapsed();
-        self.stat_tracker
-            .add_stat_event(processing_duration.as_millis() as u32, response_bytes as u32);
+        self.stat_tracker.add_stat_event(
+            processing_duration.as_millis().try_into()?,
+            response_bytes.try_into()?,
+        );
 
         Ok(resp)
     }

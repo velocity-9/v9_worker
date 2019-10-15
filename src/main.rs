@@ -1,11 +1,7 @@
 // I'd like the most pedantic warning level
 #![warn(clippy::pedantic, clippy::needless_borrow)]
-// But I don't care about these ones for now (most applicable since the code isn't fleshed out)
-#![allow(
-    clippy::module_name_repetitions,
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss
-)]
+// But I don't care about these ones
+#![allow(clippy::cast_precision_loss, clippy::module_name_repetitions)]
 
 #[macro_use]
 extern crate failure;

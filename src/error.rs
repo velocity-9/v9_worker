@@ -1,5 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 use std::io;
+use std::num::TryFromIntError;
 use std::str::Utf8Error;
 
 use failure::Backtrace;
@@ -25,6 +26,7 @@ impl WorkerError {
 pub enum WorkerErrorKind {
     Hyper(hyper::error::Error),
     Io(io::Error),
+    IntegerConversion(TryFromIntError),
     InternalJsonHandling(serde_json::Error),
     InvalidUtf8(Utf8Error),
     Nix(nix::Error),
@@ -47,6 +49,12 @@ impl Display for WorkerError {
 
             WorkerErrorKind::Io(e) => {
                 f.write_str("WorkerError, caused by internal I/O error (")?;
+                e.fmt(f)?;
+                f.write_str(")")?;
+            }
+
+            WorkerErrorKind::IntegerConversion(e) => {
+                f.write_str("WorkerError, caused by internal integer conversion error (")?;
                 e.fmt(f)?;
                 f.write_str(")")?;
             }
@@ -134,6 +142,12 @@ impl From<hyper::error::Error> for WorkerError {
 impl From<io::Error> for WorkerError {
     fn from(e: io::Error) -> Self {
         WorkerErrorKind::Io(e).into()
+    }
+}
+
+impl From<TryFromIntError> for WorkerError {
+    fn from(e: TryFromIntError) -> Self {
+        WorkerErrorKind::IntegerConversion(e).into()
     }
 }
 
