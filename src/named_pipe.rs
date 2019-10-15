@@ -1,6 +1,6 @@
+use std::convert::TryInto;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::os::raw::c_int;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::io::RawFd;
@@ -139,7 +139,7 @@ impl NamedPipe {
             let poll_flags = PollFlags::POLLOUT;
             poll(
                 &mut [PollFd::new(c_in_fd, poll_flags)],
-                (deadline - Instant::now()).as_millis() as c_int,
+                (deadline - Instant::now()).as_millis().try_into()?,
             )?;
 
             // Then write the bytes
@@ -173,7 +173,7 @@ impl NamedPipe {
             let poll_flags = PollFlags::POLLIN;
             poll(
                 &mut [PollFd::new(c_out_fd, poll_flags)],
-                (deadline - Instant::now()).as_millis() as c_int,
+                (deadline - Instant::now()).as_millis().try_into()?,
             )?;
 
             // If we've timed out, then just return an error
