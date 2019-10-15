@@ -123,7 +123,9 @@ impl NamedPipe {
     // Precondition: No newlines in the input string
     pub fn write(&mut self, v: &[u8]) -> Result<(), WorkerError> {
         // Passing in a newline violates the contract of this method
-        assert!(!v.contains(&b'\n'));
+        if v.contains(&b'\n') {
+            return Err(WorkerErrorKind::InvalidSerialization(v.to_vec()).into());
+        }
 
         // Push a newline at the end to terminate the input
         let mut v = Vec::from(v);
@@ -135,6 +137,7 @@ impl NamedPipe {
 
         let mut write_idx = 0;
         while write_idx < v.len() && Instant::now() < deadline {
+            debug!("Polling {:?}", self.component_input_fifo_path);
             // Wait until ready
             let poll_flags = PollFlags::POLLOUT;
             poll(
