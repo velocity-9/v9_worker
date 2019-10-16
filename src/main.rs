@@ -1,7 +1,11 @@
 // I'd like the most pedantic warning level
-#![warn(clippy::pedantic, clippy::needless_borrow)]
+#![warn(clippy::cargo, clippy::needless_borrow, clippy::pedantic)]
 // But I don't care about these ones
-#![allow(clippy::cast_precision_loss, clippy::module_name_repetitions)]
+#![allow(
+    clippy::cast_precision_loss,     // There is no way to avoid this precision loss
+    clippy::module_name_repetitions, // Sometimes clear naming calls for repetition
+    clippy::multiple_crate_versions  // There is no way to easily fix this without modifying our dependencies
+)]
 
 #[macro_use]
 extern crate failure;
