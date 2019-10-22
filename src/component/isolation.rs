@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::fs::canonicalize;
 use std::time::{Duration, Instant};
 
+use regex::Regex;
 use subprocess::{Exec, Popen, PopenConfig, Redirection};
 
 use crate::error::{WorkerError, WorkerErrorKind};
@@ -21,6 +22,7 @@ pub struct IsolatedProcessWrapper {
 
 impl IsolatedProcessWrapper {
     pub fn new(ar: ActivateRequest) -> Result<Self, WorkerError> {
+        // TODO: Add validation that the `executable_file` is a valid path to a real file/folder
         let isolation_controller: Box<dyn ProcessIsolationController> = match ar.execution_method {
             ExecutionMethod::PythonUnsafe => Box::new(PythonUnsafeController::new(ar.executable_file)?),
             ExecutionMethod::DockerArchive => {
@@ -127,29 +129,38 @@ impl DockerArchiveController {
             warn!("using docker for isolation on macOS likely will not work!!!");
         }
 
+        // we are calling docker load, with quiet mode enabled to suppress exccess output
+        let argv = &["load", "-q", "--input", docker_tar_file_path];
+        debug!("Calling docker argv = {:?}", argv);
         let load_result = Exec::cmd("docker")
-            .args(&["load", "-q", "--input", docker_tar_file_path])
+            .args(argv)
             .stdout(Redirection::Pipe)
+            .stderr(Redirection::Pipe)
             .capture()?;
+        let load_exit_status = load_result.exit_status;
         let load_stdout = String::from_utf8(load_result.stdout)?;
         let load_stderr = String::from_utf8(load_result.stderr)?;
 
-        if !load_result.exit_status.success() {
+        if !load_exit_status.success() {
             return Err(
                 WorkerErrorKind::Docker(load_result.exit_status, load_stdout, load_stderr).into(),
             );
         }
 
-        // stdout looks like
-        // Loaded image: tag\n
-        let trimmed_stdout = load_stdout.trim();
-        let split_idx = "Loaded image: ".len();
-        if split_idx >= trimmed_stdout.len() {
-            return Err(
-                WorkerErrorKind::Docker(load_result.exit_status, load_stdout, load_stderr).into(),
-            );
-        }
-        let tag = &trimmed_stdout.trim()[split_idx..];
+        let regex = Regex::new("Loaded image: (?P<tag>.*)\n")?;
+        let tag = regex
+            .captures(&load_stdout)
+            .and_then(|captures| captures.name("tag"))
+            .map_or_else(
+                || {
+                    Err(WorkerErrorKind::Docker(
+                        load_exit_status,
+                        load_stdout.clone(),
+                        load_stderr,
+                    ))
+                },
+                |tag| Ok(tag.as_str()),
+            )?;
 
         debug!("Loaded image (tag = {:?})", tag);
 
@@ -173,6 +184,8 @@ impl ProcessIsolationController for DockerArchiveController {
             .into_string()
             .map_err(WorkerErrorKind::OsStringConversion)?;
 
+        // We're calling docker run, mounting the input and output pipes, then running the loaded
+        // image with their paths as parameters
         let argv = &[
             "docker",
             "run",

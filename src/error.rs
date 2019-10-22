@@ -44,6 +44,7 @@ pub enum WorkerErrorKind {
     OsStringConversion(OsString),
     PathNotFound(String),
     PipeDisconnected,
+    Regex(regex::Error),
     SubprocessStart(PopenError),
     SubprocessTerminated(ExitStatus),
     WrongMethod,
@@ -51,7 +52,6 @@ pub enum WorkerErrorKind {
 
 impl Display for WorkerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-        // Technically this isn't very DRY, but I felt like factoring it out hurt readability YMMV
         match &self.kind {
             WorkerErrorKind::Docker(exit_status, stdout, stderr) => {
                 write!(
@@ -113,6 +113,10 @@ impl Display for WorkerError {
 
             WorkerErrorKind::PipeDisconnected => {
                 write!(f, "Worker Error, internal pipe disconnected")?;
+            }
+
+            WorkerErrorKind::Regex(e) => {
+                write!(f, "Worker Error, invalid regex: {}", e)?;
             }
 
             WorkerErrorKind::SubprocessStart(e) => {
@@ -198,6 +202,12 @@ impl From<FromUtf8Error> for WorkerError {
 impl From<nix::Error> for WorkerError {
     fn from(e: nix::Error) -> Self {
         WorkerErrorKind::Nix(e).into()
+    }
+}
+
+impl From<regex::Error> for WorkerError {
+    fn from(e: regex::Error) -> Self {
+        WorkerErrorKind::Regex(e).into()
     }
 }
 
