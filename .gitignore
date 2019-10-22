@@ -5,3 +5,9 @@
 # IDEA files
 /*.iml
 /.idea
+
+# Log files (Vagrant generated)
+/*.log
+
+# Vagrant
+/.vagrant

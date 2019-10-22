@@ -52,7 +52,7 @@ impl NamedPipeCreator {
         )?;
 
         debug!(
-            "Creating new pipe I = {:?}, O = {:?}",
+            "Creating new pipes I = {:?}, O = {:?}",
             component_input_fifo_path, component_output_fifo_path
         );
 
@@ -75,9 +75,9 @@ pub struct NamedPipe {
     component_output_fifo_file: Option<File>,
 }
 
-const PIPE_CREATION_TIMEOUT_MS: u64 = 100;
-const PIPE_IO_TIMEOUT_MS: u64 = 1000;
-const PIPE_POLL_INTERVAL_MS: u64 = 2;
+const PIPE_CREATION_TIMEOUT_MS: u64 = 10000;
+const PIPE_IO_TIMEOUT_MS: u64 = 5000;
+const PIPE_POLL_INTERVAL_MS: u64 = 3;
 
 const BUF_SIZE: usize = 256;
 
@@ -111,12 +111,14 @@ impl NamedPipe {
             sleep(Duration::from_millis(PIPE_POLL_INTERVAL_MS))
         }
 
+        trace!("Finished trying to open component pipes");
+
         if let (Some(c_in), Some(c_out)) =
             (&self.component_input_fifo_file, &self.component_output_fifo_file)
         {
             Ok((c_in.as_raw_fd(), c_out.as_raw_fd()))
         } else {
-            Err(WorkerErrorKind::OperationTimedOut.into())
+            Err(WorkerErrorKind::OperationTimedOut("fifo pipe opening").into())
         }
     }
 
@@ -124,7 +126,7 @@ impl NamedPipe {
     pub fn write(&mut self, v: &[u8]) -> Result<(), WorkerError> {
         // Passing in a newline violates the contract of this method
         if v.contains(&b'\n') {
-            return Err(WorkerErrorKind::InvalidSerialization(v.to_vec()).into());
+            return Err(WorkerErrorKind::InvalidSerialization("contains newline", v.to_vec()).into());
         }
 
         // Push a newline at the end to terminate the input
@@ -137,7 +139,7 @@ impl NamedPipe {
 
         let mut write_idx = 0;
         while write_idx < v.len() && Instant::now() < deadline {
-            debug!("Polling {:?}", self.component_input_fifo_path);
+            trace!("Polling {:?}", self.component_input_fifo_path);
             // Wait until ready
             let poll_flags = PollFlags::POLLOUT;
             poll(
@@ -152,7 +154,7 @@ impl NamedPipe {
 
         // If we didn't write everything, we timed out
         if write_idx < v.len() {
-            return Err(WorkerErrorKind::OperationTimedOut.into());
+            return Err(WorkerErrorKind::OperationTimedOut("pipe writing").into());
         }
 
         Ok(())
@@ -172,7 +174,7 @@ impl NamedPipe {
         let mut result = Vec::with_capacity(BUF_SIZE);
         loop {
             // Wait for data to be available
-            debug!("Polling {:?}", self.component_output_fifo_path);
+            trace!("Polling {:?}", self.component_output_fifo_path);
             let poll_flags = PollFlags::POLLIN;
             poll(
                 &mut [PollFd::new(c_out_fd, poll_flags)],
@@ -181,7 +183,7 @@ impl NamedPipe {
 
             // If we've timed out, then just return an error
             if Instant::now() > deadline {
-                return Err(WorkerErrorKind::OperationTimedOut.into());
+                return Err(WorkerErrorKind::OperationTimedOut("pipe reading").into());
             }
 
             // Otherwise read n bytes
@@ -200,7 +202,7 @@ impl NamedPipe {
 
             // Reading 0 bytes indicates unix doesn't think there is more to read
             if n == 0 {
-                return Err(WorkerErrorKind::SubprocessDisconnected.into());
+                return Err(WorkerErrorKind::PipeDisconnected.into());
             }
 
             for &v in &read_buf[0..n] {
@@ -214,5 +216,12 @@ impl NamedPipe {
 
     pub fn component_output_file(&self) -> &PathBuf {
         &self.component_output_fifo_path
+    }
+
+    pub fn query(&mut self, req: &str) -> Result<String, WorkerError> {
+        self.write(req.as_bytes())?;
+
+        let read_bytes = self.read()?;
+        Ok(String::from_utf8(read_bytes)?)
     }
 }

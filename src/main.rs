@@ -1,5 +1,10 @@
 // I'd like the most pedantic warning level
-#![warn(clippy::cargo, clippy::needless_borrow, clippy::pedantic)]
+#![warn(
+    clippy::cargo,
+    clippy::needless_borrow,
+    clippy::pedantic,
+    clippy::redundant_clone
+)]
 // But I don't care about these ones
 #![allow(
     clippy::cast_precision_loss,     // There is no way to avoid this precision loss
@@ -32,9 +37,11 @@ const HEARTBEAT_PERIODICITY: Duration = Duration::from_secs(1);
 
 fn main() {
     // Initialize logging
-    flexi_logger::Logger::with_str("debug, tokio_reactor=info, hyper=info")
-        .start()
-        .unwrap();
+    flexi_logger::Logger::with_str(
+        "trace, hyper=info, mio=info, tokio_reactor=info, tokio_threadpool=info",
+    )
+    .start()
+    .unwrap();
     info!("worker starting... (logging initialized)");
 
     // Parse command line arguments
@@ -60,5 +67,5 @@ fn main() {
         request_handler::global_request_entrypoint,
     );
 
-    info!("Sever loop finished, shutting down...");
+    warn!("Sever loop finished, shutting down...");
 }

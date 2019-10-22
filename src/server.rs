@@ -19,7 +19,7 @@ where
     };
 
     let addr = ([127, 0, 0, 1], port).into();
-    debug!("Spinning up server on {:?}", addr);
+    info!("Spinning up server on {:?}", addr);
 
     let new_service = move || {
         let copied_state = state.clone();

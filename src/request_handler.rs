@@ -77,6 +77,7 @@ impl HttpRequestHandler {
         // Get the uri path, and then split it around slashes into components
         // Note: All URIs start with a slash, so we skip the first entry in the split (which is always just "")
         let path_components: Vec<&str> = uri.path().split('/').skip(1).collect();
+        debug!("path = {:?}", path_components);
 
         if path_components[0] == "meta" && path_components.len() == 2 {
             self.handle_meta_request(
@@ -96,9 +97,9 @@ impl HttpRequestHandler {
             let path = ComponentPath::new(user, repo);
             let component = component_router.lookup_component(&path);
 
-            component.map_or_else(
+            let resp = component.map_or_else(
                 || {
-                    debug!("Could not find serverless component {:?}", path);
+                    warn!("Could not find serverless component {:?}", path);
                     Err(WorkerErrorKind::PathNotFound(path_components.join("/")).into())
                 },
                 |component_handle| {
@@ -110,7 +111,11 @@ impl HttpRequestHandler {
                         body,
                     )
                 },
-            )
+            );
+
+            trace!("Finished serverless request processing... ({:?})", resp);
+
+            resp
         } else {
             Err(WorkerErrorKind::PathNotFound(path_components.join("/")).into())
         }

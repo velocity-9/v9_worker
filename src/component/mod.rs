@@ -127,7 +127,7 @@ impl ComponentManager {
 
         self.active_components.remove(&deactivate_request.id.path);
 
-        info!("Successfully activated a component ({:?})", deactivate_request);
+        info!("Successfully deactivated a component ({:?})", deactivate_request);
 
         DeactivateResponse {
             result: DeactivationStatus::DeactivationSuccessful,
