@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::fs::canonicalize;
+use std::time::{Duration, Instant};
 
 use subprocess::{Popen, PopenConfig};
 
@@ -7,10 +8,15 @@ use crate::error::WorkerError;
 use crate::model::{ActivateRequest, ExecutionMethod};
 use crate::named_pipe::{NamedPipe, NamedPipeCreator};
 
+// Shutdown an unused component after 10 minutes
+const EXPIRY_DURATION: Duration = Duration::from_secs(60 * 10);
+
 #[derive(Debug)]
 pub struct IsolatedProcessWrapper {
     isolation_controller: Box<dyn ProcessIsolationController>,
     process_handle: Option<Box<dyn IsolatedProcessHandle>>,
+
+    last_accessed: Instant,
 }
 
 impl IsolatedProcessWrapper {
@@ -22,10 +28,14 @@ impl IsolatedProcessWrapper {
         Ok(Self {
             isolation_controller,
             process_handle: None,
+
+            last_accessed: Instant::now(),
         })
     }
 
     pub fn query_process(&mut self, req: &str) -> Result<String, WorkerError> {
+        self.last_accessed = Instant::now();
+
         if self.process_handle.is_none() {
             self.process_handle = Some(self.isolation_controller.boot_process()?)
         }
@@ -41,6 +51,18 @@ impl IsolatedProcessWrapper {
         }
 
         resp
+    }
+
+    // The `heartbeat` function is called periodically
+    pub fn heartbeat(&mut self) {
+        if self.process_handle.is_none() {
+            return;
+        }
+
+        if Instant::now() - self.last_accessed > EXPIRY_DURATION {
+            debug!("Shutting down unused function {:?}", self.process_handle);
+            self.process_handle = None
+        }
     }
 }
 
@@ -104,5 +126,13 @@ impl IsolatedProcessHandle for PythonUnsafeHandle {
         debug!("Got back {:?} from python-unsafe process", resp);
 
         Ok(resp)
+    }
+}
+
+impl Drop for PythonUnsafeHandle {
+    fn drop(&mut self) {
+        if let Err(e) = self.subprocess.terminate() {
+            debug!("Failed to terminate process {:?}, err {:?}", self.subprocess, e);
+        }
     }
 }

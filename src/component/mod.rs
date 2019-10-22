@@ -164,6 +164,18 @@ impl ComponentManager {
             active_components,
         }
     }
+
+    // The heartbeat function is called periodically
+    pub fn heartbeat(&self) {
+        for component in self.active_components.values() {
+            // It's okay not to block on the lock -- heartbeats have no guaranteed periodicity
+            // (Plus, this is only used for component shutdown, if someone has this lock, the
+            // component  is clearly still in use)
+            if let Some(mut handle) = component.try_lock() {
+                handle.heartbeat()
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -192,6 +204,8 @@ impl ComponentHandle {
             request_arguments: query,
             request_body: body,
         };
+
+        debug!("Firing component request {:?}", request);
 
         // Our communication with subprocesses has protocol calls for one percent encoded JSON per request/response
         // We handle this deserialization here to keep it general
@@ -238,5 +252,10 @@ impl ComponentHandle {
             id: self.id.clone(),
             component_stats,
         }
+    }
+
+    // The heartbeat function is called periodically
+    pub fn heartbeat(&mut self) {
+        self.component_process_wrapper.heartbeat()
     }
 }

@@ -4,7 +4,7 @@ use std::num::TryFromIntError;
 use std::str::Utf8Error;
 
 use failure::Backtrace;
-use hyper::{Body, Response};
+use hyper::{Body, Response, StatusCode};
 use subprocess::PopenError;
 
 #[derive(Debug, Fail)]
@@ -28,12 +28,13 @@ pub enum WorkerErrorKind {
     Io(io::Error),
     IntegerConversion(TryFromIntError),
     InternalJsonHandling(serde_json::Error),
+    InvalidSerialization(Vec<u8>),
     InvalidUtf8(Utf8Error),
     Nix(nix::Error),
     OperationTimedOut,
     PathNotFound(String),
-    SubprocessStart(PopenError),
     SubprocessDisconnected,
+    SubprocessStart(PopenError),
     WrongMethod,
 }
 
@@ -65,6 +66,15 @@ impl Display for WorkerError {
                 f.write_str(")")?;
             }
 
+            WorkerErrorKind::InvalidSerialization(l) => {
+                // Weird import here, but we need this trait in this scope
+                use std::fmt::Debug;
+
+                f.write_str("WorkerError, caused by internal invalid serialization (")?;
+                l.fmt(f)?;
+                f.write_str(")")?;
+            }
+
             WorkerErrorKind::InvalidUtf8(e) => {
                 f.write_str("WorkerError, caused by internal utf8 decode error (")?;
                 e.fmt(f)?;
@@ -87,14 +97,14 @@ impl Display for WorkerError {
                 f.write_str(")")?;
             }
 
+            WorkerErrorKind::SubprocessDisconnected => {
+                f.write_str("WorkerError, caused by subprocess disconnecting")?;
+            }
+
             WorkerErrorKind::SubprocessStart(e) => {
                 f.write_str("WorkerError, caused by internal subprocess error (")?;
                 e.fmt(f)?;
                 f.write_str(")")?;
-            }
-
-            WorkerErrorKind::SubprocessDisconnected => {
-                f.write_str("WorkerError, caused by subprocess disconnecting")?;
             }
 
             WorkerErrorKind::WrongMethod => {
@@ -115,18 +125,20 @@ impl Into<Response<Body>> for WorkerError {
     fn into(self) -> Response<Body> {
         match &self.kind {
             // Special case the "PathNotFound" error, since it maps cleanly to a 404
-            WorkerErrorKind::PathNotFound(_) => {
-                Response::builder().status(404).body(Body::from("")).unwrap()
-            }
+            WorkerErrorKind::PathNotFound(_) => Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from(""))
+                .unwrap(),
 
             // Also special case the "WrongMethodError" error since it maps cleanly to a 405
-            WorkerErrorKind::WrongMethod => {
-                Response::builder().status(405).body(Body::from("")).unwrap()
-            }
+            WorkerErrorKind::WrongMethod => Response::builder()
+                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .body(Body::from(""))
+                .unwrap(),
 
             // Otherwise a 500 response is fine
             _ => Response::builder()
-                .status(500)
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from(self.to_string()))
                 .unwrap(),
         }
