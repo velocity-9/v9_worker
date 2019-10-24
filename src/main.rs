@@ -20,7 +20,9 @@ extern crate log;
 extern crate serde;
 
 mod component;
+mod docker;
 mod error;
+mod fs_utils;
 mod model;
 mod named_pipe;
 mod request_handler;
@@ -37,11 +39,8 @@ const HEARTBEAT_PERIODICITY: Duration = Duration::from_secs(1);
 
 fn main() {
     // Initialize logging
-    flexi_logger::Logger::with_str(
-        "trace, hyper=info, mio=info, tokio_reactor=info, tokio_threadpool=info",
-    )
-    .start()
-    .unwrap();
+    let log_spec = "debug, hyper=info, mio=info, tokio_reactor=info, tokio_threadpool=info";
+    flexi_logger::Logger::with_str(log_spec).start().unwrap();
     info!("worker starting... (logging initialized)");
 
     // Parse command line arguments
@@ -50,10 +49,14 @@ fn main() {
         info!("running in development mode");
     }
 
+    // Pre-initialize idle container creation
+    lazy_static::initialize(&docker::idle_container_creator::GLOBAL_IDLE_CONTAINER_CREATOR);
+
     // Create handler to deal with HTTP requests
     let http_request_handler = Arc::new(HttpRequestHandler::new());
 
     // Create a heartbeat thread for the ComponentManager
+    // (We want a periodic signal to check on our components, and perhaps shut them down)
     let heartbeat_handler_ref = http_request_handler.clone();
     thread::spawn(move || loop {
         heartbeat_handler_ref.component_manager().read().heartbeat();

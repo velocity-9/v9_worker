@@ -21,6 +21,8 @@ pub struct ComponentId {
 
 #[derive(Clone, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
 pub enum ExecutionMethod {
+    #[serde(rename = "containerized-script")]
+    ContainerizedScript,
     #[serde(rename = "docker-archive")]
     DockerArchive,
     #[serde(rename = "python-unsafe")]

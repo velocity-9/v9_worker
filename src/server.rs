@@ -18,7 +18,7 @@ where
         PRODUCTION_PORT
     };
 
-    let addr = ([127, 0, 0, 1], port).into();
+    let addr = ([0, 0, 0, 0], port).into();
     info!("Spinning up server on {:?}", addr);
 
     let new_service = move || {
