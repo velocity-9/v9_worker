@@ -2,9 +2,10 @@ use std::fmt::Debug;
 use std::fs::canonicalize;
 use std::time::{Duration, Instant};
 
-use subprocess::{Popen, PopenConfig};
+use regex::Regex;
+use subprocess::{Exec, Popen, PopenConfig, Redirection};
 
-use crate::error::WorkerError;
+use crate::error::{WorkerError, WorkerErrorKind};
 use crate::model::{ActivateRequest, ExecutionMethod};
 use crate::named_pipe::{NamedPipe, NamedPipeCreator};
 
@@ -21,8 +22,12 @@ pub struct IsolatedProcessWrapper {
 
 impl IsolatedProcessWrapper {
     pub fn new(ar: ActivateRequest) -> Result<Self, WorkerError> {
-        let isolation_controller = match ar.execution_method {
+        // TODO: Add validation that the `executable_file` is a valid path to a real file/folder
+        let isolation_controller: Box<dyn ProcessIsolationController> = match ar.execution_method {
             ExecutionMethod::PythonUnsafe => Box::new(PythonUnsafeController::new(ar.executable_file)?),
+            ExecutionMethod::DockerArchive => {
+                Box::new(DockerArchiveController::new(&ar.executable_file)?)
+            }
         };
 
         Ok(Self {
@@ -44,6 +49,7 @@ impl IsolatedProcessWrapper {
         let handle = self.process_handle.as_mut().unwrap();
 
         let resp = handle.query_process(req);
+        trace!("attempted to query some process and got {:?}", resp);
 
         // If querying the process fails, then we need to restart it
         if resp.is_err() {
@@ -93,46 +99,144 @@ impl ProcessIsolationController for PythonUnsafeController {
     fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
         let pipe = self.pipe_creator.new_pipe()?;
 
-        let c_in = canonicalize(pipe.component_input_file())?.into_os_string();
-        let c_out = canonicalize(pipe.component_output_file())?.into_os_string();
+        let c_in = canonicalize(pipe.component_input_file())?
+            .into_os_string()
+            .into_string()
+            .map_err(WorkerErrorKind::OsStringConversion)?;
+        let c_out = canonicalize(pipe.component_output_file())?
+            .into_os_string()
+            .into_string()
+            .map_err(WorkerErrorKind::OsStringConversion)?;
 
         let subprocess = Popen::create(
-            &[
-                "python3",
-                "-u",
-                &self.executable_file,
-                &c_in.to_string_lossy(),
-                &c_out.to_string_lossy(),
-            ],
+            &["python3", "-u", &self.executable_file, &c_in, &c_out],
             PopenConfig::default(),
         )?;
 
-        Ok(Box::new(PythonUnsafeHandle { subprocess, pipe }))
+        Ok(Box::new(PipedProcessHandle { subprocess, pipe }))
     }
 }
 
 #[derive(Debug)]
-pub struct PythonUnsafeHandle {
+struct DockerArchiveController {
+    pipe_creator: NamedPipeCreator,
+    docker_image_tag: String,
+}
+
+impl DockerArchiveController {
+    pub fn new(docker_tar_file_path: &str) -> Result<Self, WorkerError> {
+        if cfg!(target_os = "macos") {
+            warn!("using docker for isolation on macOS likely will not work!!!");
+        }
+
+        // we are calling docker load, with quiet mode enabled to suppress exccess output
+        let argv = &["load", "-q", "--input", docker_tar_file_path];
+        debug!("Calling docker argv = {:?}", argv);
+        let load_result = Exec::cmd("docker")
+            .args(argv)
+            .stdout(Redirection::Pipe)
+            .stderr(Redirection::Pipe)
+            .capture()?;
+        let load_exit_status = load_result.exit_status;
+        let load_stdout = String::from_utf8(load_result.stdout)?;
+        let load_stderr = String::from_utf8(load_result.stderr)?;
+
+        if !load_exit_status.success() {
+            return Err(
+                WorkerErrorKind::Docker(load_result.exit_status, load_stdout, load_stderr).into(),
+            );
+        }
+
+        let regex = Regex::new("Loaded image: (?P<tag>.*)\n")?;
+        let tag = regex
+            .captures(&load_stdout)
+            .and_then(|captures| captures.name("tag"))
+            .map_or_else(
+                || {
+                    Err(WorkerErrorKind::Docker(
+                        load_exit_status,
+                        load_stdout.clone(),
+                        load_stderr,
+                    ))
+                },
+                |tag| Ok(tag.as_str()),
+            )?;
+
+        debug!("Loaded image (tag = {:?})", tag);
+
+        Ok(Self {
+            pipe_creator: NamedPipeCreator::new()?,
+            docker_image_tag: tag.to_string(),
+        })
+    }
+}
+
+impl ProcessIsolationController for DockerArchiveController {
+    fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
+        let pipe = self.pipe_creator.new_pipe()?;
+
+        let c_in = canonicalize(pipe.component_input_file())?
+            .into_os_string()
+            .into_string()
+            .map_err(WorkerErrorKind::OsStringConversion)?;
+        let c_out = canonicalize(pipe.component_output_file())?
+            .into_os_string()
+            .into_string()
+            .map_err(WorkerErrorKind::OsStringConversion)?;
+
+        // We're calling docker run, mounting the input and output pipes, then running the loaded
+        // image with their paths as parameters
+        let argv = &[
+            "docker",
+            "run",
+            "-v",
+            &format!("{}:{}", c_in, c_in),
+            "-v",
+            &format!("{}:{}", c_out, c_out),
+            &self.docker_image_tag,
+            &c_in,
+            &c_out,
+        ];
+        debug!("Executing docker argv = {:?}", argv);
+        let docker_subprocess = Popen::create(argv, PopenConfig::default())?;
+
+        Ok(Box::new(PipedProcessHandle {
+            subprocess: docker_subprocess,
+            pipe,
+        }))
+    }
+}
+
+// TODO: Add a drop that gets rid of the loaded docker images after we're done with them
+
+#[derive(Debug)]
+pub struct PipedProcessHandle {
     subprocess: Popen,
     pipe: NamedPipe,
 }
 
-impl IsolatedProcessHandle for PythonUnsafeHandle {
+impl IsolatedProcessHandle for PipedProcessHandle {
     fn query_process(&mut self, req: &str) -> Result<String, WorkerError> {
-        debug!("Writing {:?} to python-unsafe process", req);
-        self.pipe.write(req.as_bytes())?;
-        let bytes = self.pipe.read()?;
-        let resp = String::from_utf8(bytes).map_err(|e| e.utf8_error())?;
-        debug!("Got back {:?} from python-unsafe process", resp);
+        // Check if the subprocess has terminated
+        if let Some(exit_status) = self.subprocess.poll() {
+            return Err(WorkerErrorKind::SubprocessTerminated(exit_status).into());
+        }
+
+        debug!("Writing {:?} to piped process", req);
+        let resp = self.pipe.query(req)?;
+        debug!("Got back {:?} from piped process", resp);
 
         Ok(resp)
     }
 }
 
-impl Drop for PythonUnsafeHandle {
+impl Drop for PipedProcessHandle {
     fn drop(&mut self) {
         if let Err(e) = self.subprocess.terminate() {
-            debug!("Failed to terminate process {:?}, err {:?}", self.subprocess, e);
+            // Detach so we don't hang waiting for it
+            self.subprocess.detach();
+
+            warn!("Failed to terminate process {:?}, err {:?}", self.subprocess, e);
         }
     }
 }

@@ -21,6 +21,8 @@ pub struct ComponentId {
 
 #[derive(Clone, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
 pub enum ExecutionMethod {
+    #[serde(rename = "docker-archive")]
+    DockerArchive,
     #[serde(rename = "python-unsafe")]
     PythonUnsafe,
 }
@@ -101,7 +103,7 @@ pub struct StatusResponse {
     pub active_components: Vec<ComponentStatus>,
 }
 
-#[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
 pub struct ComponentRequest {
     pub called_function: String,
 
@@ -111,7 +113,7 @@ pub struct ComponentRequest {
     pub request_body: String,
 }
 
-#[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
 pub struct ComponentResponse {
     pub response_body: String,
     pub http_response_code: u32,

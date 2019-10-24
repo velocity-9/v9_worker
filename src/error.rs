@@ -1,11 +1,13 @@
+use std::ffi::OsString;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::num::TryFromIntError;
 use std::str::Utf8Error;
+use std::string::FromUtf8Error;
 
 use failure::Backtrace;
 use hyper::{Body, Response, StatusCode};
-use subprocess::PopenError;
+use subprocess::{ExitStatus, PopenError};
 
 #[derive(Debug, Fail)]
 pub struct WorkerError {
@@ -22,102 +24,118 @@ impl WorkerError {
     }
 }
 
+impl From<WorkerErrorKind> for WorkerError {
+    fn from(kind: WorkerErrorKind) -> Self {
+        Self::new(kind)
+    }
+}
+
 #[derive(Debug)]
 pub enum WorkerErrorKind {
+    Docker(ExitStatus, String, String),
     Hyper(hyper::error::Error),
     Io(io::Error),
     IntegerConversion(TryFromIntError),
     InternalJsonHandling(serde_json::Error),
-    InvalidSerialization(Vec<u8>),
+    InvalidSerialization(&'static str, Vec<u8>),
     InvalidUtf8(Utf8Error),
     Nix(nix::Error),
-    OperationTimedOut,
+    OperationTimedOut(&'static str),
+    OsStringConversion(OsString),
     PathNotFound(String),
-    SubprocessDisconnected,
+    PipeDisconnected,
+    Regex(regex::Error),
     SubprocessStart(PopenError),
+    SubprocessTerminated(ExitStatus),
     WrongMethod,
 }
 
 impl Display for WorkerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-        // Technically this isn't very DRY, but I felt like factoring it out hurt readability YMMV
         match &self.kind {
+            WorkerErrorKind::Docker(exit_status, stdout, stderr) => {
+                write!(
+                    f,
+                    "WorkerError, caused by internal Docker error: exit_status = {:?}, output = ({}, {})",
+                    exit_status,
+                    stdout,
+                    stderr
+                )?;
+            }
+
             WorkerErrorKind::Hyper(e) => {
-                f.write_str("WorkerError, caused by internal hyper error (")?;
-                e.fmt(f)?;
-                f.write_str(")")?;
+                write!(f, "WorkerError, caused by internal hyper error: {}", e)?;
             }
 
             WorkerErrorKind::Io(e) => {
-                f.write_str("WorkerError, caused by internal I/O error (")?;
-                e.fmt(f)?;
-                f.write_str(")")?;
+                write!(f, "WorkerError, caused by internal I/O error: {}", e)?;
             }
 
             WorkerErrorKind::IntegerConversion(e) => {
-                f.write_str("WorkerError, caused by internal integer conversion error (")?;
-                e.fmt(f)?;
-                f.write_str(")")?;
+                write!(
+                    f,
+                    "WorkerError, caused by internal integer conversion error: {}",
+                    e
+                )?;
             }
 
             WorkerErrorKind::InternalJsonHandling(e) => {
-                f.write_str("WorkerError, caused by internal serde_json error (")?;
-                e.fmt(f)?;
-                f.write_str(")")?;
+                write!(f, "WorkerError, caused by internal serde_json error: {}", e)?;
             }
 
-            WorkerErrorKind::InvalidSerialization(l) => {
-                // Weird import here, but we need this trait in this scope
-                use std::fmt::Debug;
-
-                f.write_str("WorkerError, caused by internal invalid serialization (")?;
-                l.fmt(f)?;
-                f.write_str(")")?;
+            WorkerErrorKind::InvalidSerialization(problem, l) => {
+                write!(
+                    f,
+                    "WorkerError, {} with invalid series of bytes: {:?}",
+                    problem, l
+                )?;
             }
 
             WorkerErrorKind::InvalidUtf8(e) => {
-                f.write_str("WorkerError, caused by internal utf8 decode error (")?;
-                e.fmt(f)?;
-                f.write_str(")")?;
+                write!(f, "WorkerError, caused by internal utf8 decode error: {}", e)?;
             }
 
             WorkerErrorKind::Nix(e) => {
-                f.write_str("WorkerError, caused by internal unix error (")?;
-                e.fmt(f)?;
-                f.write_str(")")?;
+                write!(f, "WorkerError, caused by internal unix error: {}", e)?;
             }
 
-            WorkerErrorKind::OperationTimedOut => {
-                f.write_str("WorkerError, operation timed out")?;
+            WorkerErrorKind::OperationTimedOut(op_name) => {
+                write!(f, "WorkerError, {} operation timed out", *op_name)?;
+            }
+
+            WorkerErrorKind::OsStringConversion(os_string) => {
+                write!(f, "WorkerError, caused by problematic OsString ({:?})", os_string)?;
             }
 
             WorkerErrorKind::PathNotFound(path) => {
-                f.write_str("WorkerError, path not found (")?;
-                f.write_str(path)?;
-                f.write_str(")")?;
+                write!(f, "WorkerError, path not found: {}", path)?;
             }
 
-            WorkerErrorKind::SubprocessDisconnected => {
-                f.write_str("WorkerError, caused by subprocess disconnecting")?;
+            WorkerErrorKind::PipeDisconnected => {
+                write!(f, "Worker Error, internal pipe disconnected")?;
+            }
+
+            WorkerErrorKind::Regex(e) => {
+                write!(f, "Worker Error, invalid regex: {}", e)?;
             }
 
             WorkerErrorKind::SubprocessStart(e) => {
-                f.write_str("WorkerError, caused by internal subprocess error (")?;
-                e.fmt(f)?;
-                f.write_str(")")?;
+                write!(f, "WorkerError, caused by internal subprocess error: {}", e)?;
+            }
+
+            WorkerErrorKind::SubprocessTerminated(exit_status) => {
+                write!(
+                    f,
+                    "WorkerError, caused by subprocess terminating, with code {:?}",
+                    exit_status
+                )?;
             }
 
             WorkerErrorKind::WrongMethod => {
-                f.write_str("WorkerError, invalid http verb")?;
+                write!(f, "WorkerError, invalid http verb")?;
             }
         }
         Ok(())
-    }
-}
-
-impl From<WorkerErrorKind> for WorkerError {
-    fn from(kind: WorkerErrorKind) -> Self {
-        Self::new(kind)
     }
 }
 
@@ -175,9 +193,21 @@ impl From<Utf8Error> for WorkerError {
     }
 }
 
+impl From<FromUtf8Error> for WorkerError {
+    fn from(e: FromUtf8Error) -> Self {
+        WorkerErrorKind::InvalidUtf8(e.utf8_error()).into()
+    }
+}
+
 impl From<nix::Error> for WorkerError {
     fn from(e: nix::Error) -> Self {
         WorkerErrorKind::Nix(e).into()
+    }
+}
+
+impl From<regex::Error> for WorkerError {
+    fn from(e: regex::Error) -> Self {
+        WorkerErrorKind::Regex(e).into()
     }
 }
 
