@@ -4,8 +4,7 @@ use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::io::RawFd;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -19,27 +18,37 @@ use tempfile::TempDir;
 use crate::error::{WorkerError, WorkerErrorKind};
 
 #[derive(Debug)]
-pub struct NamedPipeCreator {
-    dir: TempDir,
-    counter: AtomicU32,
+pub struct NamedPipe {
+    root_folder: TempDir,
+
+    component_input_fifo_path: PathBuf,
+    component_output_fifo_path: PathBuf,
+
+    component_input_fifo_file: Option<File>,
+    component_output_fifo_file: Option<File>,
 }
 
-impl NamedPipeCreator {
+// TODO: Justify these values more
+
+// This is basically our limit on startup time
+const PIPE_CREATION_TIMEOUT_MS: u64 = 10000;
+// This is basically our limit on individual call time
+const PIPE_IO_TIMEOUT_MS: u64 = 10000;
+// This is a knob for our cpu usage during calls
+const PIPE_POLL_INTERVAL_MS: u64 = 3;
+
+// How much we should read from the component at the time
+const BUF_SIZE: usize = 512;
+
+impl NamedPipe {
     pub fn new() -> Result<Self, WorkerError> {
-        Ok(Self {
-            dir: TempDir::new()?,
-            counter: AtomicU32::new(0),
-        })
+        let dir = TempDir::new()?;
+        Ok(Self::in_dir(dir)?)
     }
 
-    pub fn new_pipe(&self) -> Result<NamedPipe, WorkerError> {
-        let pipe_num = self.counter.fetch_add(1, Ordering::SeqCst);
-
-        let component_input_fifo_filename = format!("IN_{}", pipe_num);
-        let component_input_fifo_path = self.dir.path().join(component_input_fifo_filename);
-
-        let component_output_fifo_filename = format!("OUT_{}", pipe_num);
-        let component_output_fifo_path = self.dir.path().join(component_output_fifo_filename);
+    pub fn in_dir(dir: TempDir) -> Result<Self, WorkerError> {
+        let component_input_fifo_path = dir.path().join("IN");
+        let component_output_fifo_path = dir.path().join("OUT");
 
         // These fifos are created with 777 permissions
         mkfifo(
@@ -56,7 +65,9 @@ impl NamedPipeCreator {
             component_input_fifo_path, component_output_fifo_path
         );
 
-        Ok(NamedPipe {
+        Ok(Self {
+            root_folder: dir,
+
             component_input_fifo_path,
             component_output_fifo_path,
 
@@ -64,24 +75,7 @@ impl NamedPipeCreator {
             component_output_fifo_file: None,
         })
     }
-}
 
-#[derive(Debug)]
-pub struct NamedPipe {
-    component_input_fifo_path: PathBuf,
-    component_output_fifo_path: PathBuf,
-
-    component_input_fifo_file: Option<File>,
-    component_output_fifo_file: Option<File>,
-}
-
-const PIPE_CREATION_TIMEOUT_MS: u64 = 10000;
-const PIPE_IO_TIMEOUT_MS: u64 = 5000;
-const PIPE_POLL_INTERVAL_MS: u64 = 3;
-
-const BUF_SIZE: usize = 256;
-
-impl NamedPipe {
     fn get_fds(&mut self) -> Result<(RawFd, RawFd), WorkerError> {
         let deadline = Instant::now() + Duration::from_millis(PIPE_CREATION_TIMEOUT_MS);
 
@@ -160,7 +154,7 @@ impl NamedPipe {
         Ok(())
     }
 
-    pub fn component_input_file(&self) -> &PathBuf {
+    pub fn component_input_file(&self) -> &Path {
         &self.component_input_fifo_path
     }
 
@@ -214,7 +208,7 @@ impl NamedPipe {
         }
     }
 
-    pub fn component_output_file(&self) -> &PathBuf {
+    pub fn component_output_file(&self) -> &Path {
         &self.component_output_fifo_path
     }
 

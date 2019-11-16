@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::num::TryFromIntError;
+use std::path::PathBuf;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 
@@ -40,6 +41,7 @@ pub enum WorkerErrorKind {
     InvalidSerialization(&'static str, Vec<u8>),
     InvalidUtf8(Utf8Error),
     Nix(nix::Error),
+    NotAFile(PathBuf),
     OperationTimedOut(&'static str),
     OsStringConversion(OsString),
     PathNotFound(String),
@@ -47,6 +49,7 @@ pub enum WorkerErrorKind {
     Regex(regex::Error),
     SubprocessStart(PopenError),
     SubprocessTerminated(ExitStatus),
+    UnsupportedPlatform(&'static str),
     WrongMethod,
 }
 
@@ -99,6 +102,10 @@ impl Display for WorkerError {
                 write!(f, "WorkerError, caused by internal unix error: {}", e)?;
             }
 
+            WorkerErrorKind::NotAFile(p) => {
+                write!(f, "WorkerError, not a file (perhaps it's a folder?): {:?}", p)?;
+            }
+
             WorkerErrorKind::OperationTimedOut(op_name) => {
                 write!(f, "WorkerError, {} operation timed out", *op_name)?;
             }
@@ -129,6 +136,10 @@ impl Display for WorkerError {
                     "WorkerError, caused by subprocess terminating, with code {:?}",
                     exit_status
                 )?;
+            }
+
+            WorkerErrorKind::UnsupportedPlatform(plat) => {
+                write!(f, "WorkerError, unsupported platform: {}", plat)?;
             }
 
             WorkerErrorKind::WrongMethod => {

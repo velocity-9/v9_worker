@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use crate::model::ComponentStats;
 
+// TODO: Make this match the component shutdown time
 const DEFAULT_STAT_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug)]

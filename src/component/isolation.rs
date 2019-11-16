@@ -1,16 +1,21 @@
 use std::fmt::Debug;
-use std::fs::canonicalize;
 use std::time::{Duration, Instant};
 
-use regex::Regex;
-use subprocess::{Exec, Popen, PopenConfig, Redirection};
+use subprocess::{Popen, PopenConfig};
 
+use crate::docker::idle_container_creator::get_idle_container;
+use crate::docker::{
+    call_docker_async, call_docker_sync, exec_in_container_async, exec_in_container_sync,
+    load_docker_image,
+};
 use crate::error::{WorkerError, WorkerErrorKind};
+use crate::fs_utils::canonicalize;
 use crate::model::{ActivateRequest, ExecutionMethod};
-use crate::named_pipe::{NamedPipe, NamedPipeCreator};
+use crate::named_pipe::NamedPipe;
 
 // Shutdown an unused component after 10 minutes
 const EXPIRY_DURATION: Duration = Duration::from_secs(60 * 10);
+const CODE_FOLDER: &str = "/home/sl";
 
 #[derive(Debug)]
 pub struct IsolatedProcessWrapper {
@@ -24,10 +29,13 @@ impl IsolatedProcessWrapper {
     pub fn new(ar: ActivateRequest) -> Result<Self, WorkerError> {
         // TODO: Add validation that the `executable_file` is a valid path to a real file/folder
         let isolation_controller: Box<dyn ProcessIsolationController> = match ar.execution_method {
-            ExecutionMethod::PythonUnsafe => Box::new(PythonUnsafeController::new(ar.executable_file)?),
+            ExecutionMethod::ContainerizedScript => {
+                Box::new(ContainerizedScriptController::new(ar.executable_file)?)
+            }
             ExecutionMethod::DockerArchive => {
                 Box::new(DockerArchiveController::new(&ar.executable_file)?)
             }
+            ExecutionMethod::PythonUnsafe => Box::new(PythonUnsafeController::new(ar.executable_file)?),
         };
 
         Ok(Self {
@@ -82,31 +90,21 @@ pub trait IsolatedProcessHandle: Debug + Send {
 
 #[derive(Debug)]
 pub struct PythonUnsafeController {
-    pipe_creator: NamedPipeCreator,
     executable_file: String,
 }
 
 impl PythonUnsafeController {
     pub fn new(executable_file: String) -> Result<Self, WorkerError> {
-        Ok(Self {
-            pipe_creator: NamedPipeCreator::new()?,
-            executable_file,
-        })
+        Ok(Self { executable_file })
     }
 }
 
 impl ProcessIsolationController for PythonUnsafeController {
     fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
-        let pipe = self.pipe_creator.new_pipe()?;
+        let pipe = NamedPipe::new()?;
 
-        let c_in = canonicalize(pipe.component_input_file())?
-            .into_os_string()
-            .into_string()
-            .map_err(WorkerErrorKind::OsStringConversion)?;
-        let c_out = canonicalize(pipe.component_output_file())?
-            .into_os_string()
-            .into_string()
-            .map_err(WorkerErrorKind::OsStringConversion)?;
+        let c_in = canonicalize(pipe.component_input_file())?;
+        let c_out = canonicalize(pipe.component_output_file())?;
 
         let subprocess = Popen::create(
             &["python3", "-u", &self.executable_file, &c_in, &c_out],
@@ -119,75 +117,33 @@ impl ProcessIsolationController for PythonUnsafeController {
 
 #[derive(Debug)]
 struct DockerArchiveController {
-    pipe_creator: NamedPipeCreator,
     docker_image_tag: String,
 }
 
 impl DockerArchiveController {
     pub fn new(docker_tar_file_path: &str) -> Result<Self, WorkerError> {
+        // TODO: Figure out if this will work on windows
         if cfg!(target_os = "macos") {
-            warn!("using docker for isolation on macOS likely will not work!!!");
+            return Err(WorkerErrorKind::UnsupportedPlatform("macos").into());
         }
-
-        // we are calling docker load, with quiet mode enabled to suppress exccess output
-        let argv = &["load", "-q", "--input", docker_tar_file_path];
-        debug!("Calling docker argv = {:?}", argv);
-        let load_result = Exec::cmd("docker")
-            .args(argv)
-            .stdout(Redirection::Pipe)
-            .stderr(Redirection::Pipe)
-            .capture()?;
-        let load_exit_status = load_result.exit_status;
-        let load_stdout = String::from_utf8(load_result.stdout)?;
-        let load_stderr = String::from_utf8(load_result.stderr)?;
-
-        if !load_exit_status.success() {
-            return Err(
-                WorkerErrorKind::Docker(load_result.exit_status, load_stdout, load_stderr).into(),
-            );
-        }
-
-        let regex = Regex::new("Loaded image: (?P<tag>.*)\n")?;
-        let tag = regex
-            .captures(&load_stdout)
-            .and_then(|captures| captures.name("tag"))
-            .map_or_else(
-                || {
-                    Err(WorkerErrorKind::Docker(
-                        load_exit_status,
-                        load_stdout.clone(),
-                        load_stderr,
-                    ))
-                },
-                |tag| Ok(tag.as_str()),
-            )?;
-
-        debug!("Loaded image (tag = {:?})", tag);
 
         Ok(Self {
-            pipe_creator: NamedPipeCreator::new()?,
-            docker_image_tag: tag.to_string(),
+            docker_image_tag: load_docker_image(docker_tar_file_path)?,
         })
     }
 }
 
 impl ProcessIsolationController for DockerArchiveController {
     fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
-        let pipe = self.pipe_creator.new_pipe()?;
+        let pipe = NamedPipe::new()?;
 
-        let c_in = canonicalize(pipe.component_input_file())?
-            .into_os_string()
-            .into_string()
-            .map_err(WorkerErrorKind::OsStringConversion)?;
-        let c_out = canonicalize(pipe.component_output_file())?
-            .into_os_string()
-            .into_string()
-            .map_err(WorkerErrorKind::OsStringConversion)?;
+        let c_in = canonicalize(pipe.component_input_file())?;
+        let c_out = canonicalize(pipe.component_output_file())?;
 
         // We're calling docker run, mounting the input and output pipes, then running the loaded
         // image with their paths as parameters
-        let argv = &[
-            "docker",
+        // TODO: Factor out the "run" logic to docker/mod.rs
+        let docker_subprocess = call_docker_async(&[
             "run",
             "-v",
             &format!("{}:{}", c_in, c_in),
@@ -196,9 +152,7 @@ impl ProcessIsolationController for DockerArchiveController {
             &self.docker_image_tag,
             &c_in,
             &c_out,
-        ];
-        debug!("Executing docker argv = {:?}", argv);
-        let docker_subprocess = Popen::create(argv, PopenConfig::default())?;
+        ])?;
 
         Ok(Box::new(PipedProcessHandle {
             subprocess: docker_subprocess,
@@ -208,6 +162,58 @@ impl ProcessIsolationController for DockerArchiveController {
 }
 
 // TODO: Add a drop that gets rid of the loaded docker images after we're done with them
+
+#[derive(Debug)]
+pub struct ContainerizedScriptController {
+    executable_file: String,
+}
+
+impl ContainerizedScriptController {
+    pub fn new(executable_file: String) -> Result<Self, WorkerError> {
+        // TODO: Figure out if this will work on windows
+        if cfg!(target_os = "macos") {
+            return Err(WorkerErrorKind::UnsupportedPlatform("macos").into());
+        }
+
+        Ok(Self { executable_file })
+    }
+}
+
+impl ProcessIsolationController for ContainerizedScriptController {
+    fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
+        let container = get_idle_container()?;
+
+        // Create the folder in the container
+        exec_in_container_sync(&container.docker_container_name, &["mkdir", "-p", CODE_FOLDER])?;
+
+        // Copy over the files
+        // (Paths that end with `/.` tell docker to copy contents)
+        // TODO: Factor this out to docker/mod.rs
+        let source = format!("{}/.", self.executable_file);
+        call_docker_sync(&[
+            "cp",
+            &source,
+            &format!("{}:{}", container.docker_container_name, CODE_FOLDER),
+        ])?;
+
+        let container_in = container.container_input_pipe_location(&container.pipe)?;
+        let container_out = container.container_output_pipe_location(&container.pipe)?;
+        let docker_subprocess = exec_in_container_async(
+            &container.docker_container_name,
+            &[
+                "bash",
+                &format!("{}/{}", CODE_FOLDER, "start.sh"),
+                &container_in,
+                &container_out,
+            ],
+        )?;
+
+        Ok(Box::new(PipedProcessHandle {
+            subprocess: docker_subprocess,
+            pipe: container.pipe,
+        }))
+    }
+}
 
 #[derive(Debug)]
 pub struct PipedProcessHandle {
@@ -222,9 +228,9 @@ impl IsolatedProcessHandle for PipedProcessHandle {
             return Err(WorkerErrorKind::SubprocessTerminated(exit_status).into());
         }
 
-        debug!("Writing {:?} to piped process", req);
+        trace!("Writing {:?} to piped process", req);
         let resp = self.pipe.query(req)?;
-        debug!("Got back {:?} from piped process", resp);
+        trace!("Got back {:?} from piped process", resp);
 
         Ok(resp)
     }

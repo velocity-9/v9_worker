@@ -146,7 +146,7 @@ impl ComponentManager {
         let memory_usage = self
             .system
             .memory()
-            .map(|mem| 1.0 - mem.total.as_u64() as f64 / mem.free.as_u64() as f64)
+            .map(|mem| 1.0 - mem.free.as_u64() as f64 / mem.total.as_u64() as f64)
             .unwrap_or(-1.0);
         // TODO: Actually implement network usage
         let network_usage = -1.0;
