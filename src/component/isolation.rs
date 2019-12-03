@@ -38,6 +38,8 @@ impl IsolatedProcessWrapper {
             ExecutionMethod::PythonUnsafe => Box::new(PythonUnsafeController::new(ar.executable_file)?),
         };
 
+        // TODO: Consider if components should auto-start (I think it would help our demo)
+
         Ok(Self {
             isolation_controller,
             process_handle: None,
