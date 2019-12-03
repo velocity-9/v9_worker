@@ -20,6 +20,7 @@ const CONTAINER_IMAGE_TAG: &str = "python";
 // 1000000000 seconds ~= 30 years
 const SLEEP_TIME: &str = "1000000000";
 
+// TODO: Consider where this should actually point
 const CONTAINER_PIPE_FOLDER: &str = "/home/io";
 
 fn next_container_name() -> String {
