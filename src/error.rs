@@ -167,7 +167,7 @@ impl Into<Response<Body>> for WorkerError {
 
             // Otherwise a 500 response is fine
             _ => Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .status(543)
                 .body(Body::from(self.to_string()))
                 .unwrap(),
         }
