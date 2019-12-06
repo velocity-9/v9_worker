@@ -137,19 +137,61 @@ impl ComponentManager {
 
     pub fn status(&self) -> StatusResponse {
         debug!("Processing status request by looking up system averages...");
-        let cpu_usage = f64::from(
-            self.system
-                .load_average()
-                .map(|avg| avg.one / 100.0)
-                .unwrap_or(-1.0),
-        );
+
+        let cpu_usage = self
+            .system
+            .load_average()
+            .map(|avg| f64::from(avg.one) / 100.0)
+            .map_err(|e| {
+                warn!("Could not get cpu usage {}", e);
+                e
+            })
+            .unwrap_or(-1.0);
+
         let memory_usage = self
             .system
             .memory()
             .map(|mem| 1.0 - mem.free.as_u64() as f64 / mem.total.as_u64() as f64)
+            .map_err(|e| {
+                warn!("Could not get memory usage {}", e);
+                e
+            })
             .unwrap_or(-1.0);
-        // TODO: Actually implement network usage
-        let network_usage = -1.0;
+
+        // TODO: Make network usage work better
+        let network_usage = self
+            .system
+            .networks()
+            .map(|network_map| {
+                let mut total_packets: f64 = -1.0;
+
+                for network in network_map.values() {
+                    let total_packets_for_device =
+                        self.system.network_stats(&network.name).map(|network_stats| {
+                            network_stats.rx_bytes.as_u64() + network_stats.tx_bytes.as_u64()
+                        });
+
+                    match total_packets_for_device {
+                        Ok(v) => {
+                            if total_packets < 0.0 {
+                                total_packets = 0.0
+                            }
+
+                            total_packets += v as f64;
+                        }
+                        Err(e) => {
+                            warn!("Could not get network stats for device {}: {}", network.name, e)
+                        }
+                    }
+                }
+
+                total_packets
+            })
+            .map_err(|e| {
+                warn!("Could not get network info: {}", e);
+                e
+            })
+            .unwrap_or(-1.0);
 
         let active_components = self
             .active_components

@@ -28,14 +28,12 @@ pub struct NamedPipe {
     component_output_fifo_file: Option<File>,
 }
 
-// TODO: Justify these values more
-
 // This is basically our limit on startup time
 const PIPE_CREATION_TIMEOUT_MS: u64 = 10000;
 // This is basically our limit on individual call time
 const PIPE_IO_TIMEOUT_MS: u64 = 10000;
 // This is a knob for our cpu usage during calls
-const PIPE_POLL_INTERVAL_MS: u64 = 3;
+const PIPE_POLL_INTERVAL_MS: u64 = 2;
 
 // How much we should read from the component at the time
 const BUF_SIZE: usize = 512;

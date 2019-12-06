@@ -2,7 +2,6 @@ use std::ffi::OsString;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::num::TryFromIntError;
-use std::path::PathBuf;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 
@@ -41,7 +40,6 @@ pub enum WorkerErrorKind {
     InvalidSerialization(&'static str, Vec<u8>),
     InvalidUtf8(Utf8Error),
     Nix(nix::Error),
-    NotAFile(PathBuf),
     OperationTimedOut(&'static str),
     OsStringConversion(OsString),
     PathNotFound(String),
@@ -100,10 +98,6 @@ impl Display for WorkerError {
 
             WorkerErrorKind::Nix(e) => {
                 write!(f, "WorkerError, caused by internal unix error: {}", e)?;
-            }
-
-            WorkerErrorKind::NotAFile(p) => {
-                write!(f, "WorkerError, not a file (perhaps it's a folder?): {:?}", p)?;
             }
 
             WorkerErrorKind::OperationTimedOut(op_name) => {

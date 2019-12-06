@@ -3,11 +3,8 @@ use std::time::{Duration, Instant};
 
 use subprocess::{Popen, PopenConfig};
 
-use crate::docker::idle_container_creator::get_idle_container;
-use crate::docker::{
-    call_docker_async, call_docker_sync, exec_in_container_async, exec_in_container_sync,
-    load_docker_image,
-};
+use crate::docker::idle_container_creator::{get_idle_container, CODE_FOLDER};
+use crate::docker::{load_docker_image, V9Container};
 use crate::error::{WorkerError, WorkerErrorKind};
 use crate::fs_utils::canonicalize;
 use crate::model::{ActivateRequest, ExecutionMethod};
@@ -15,7 +12,6 @@ use crate::named_pipe::NamedPipe;
 
 // Shutdown an unused component after 10 minutes
 const EXPIRY_DURATION: Duration = Duration::from_secs(60 * 10);
-const CODE_FOLDER: &str = "/home/sl";
 
 #[derive(Debug)]
 pub struct IsolatedProcessWrapper {
@@ -27,7 +23,9 @@ pub struct IsolatedProcessWrapper {
 
 impl IsolatedProcessWrapper {
     pub fn new(ar: ActivateRequest) -> Result<Self, WorkerError> {
-        // TODO: Add validation that the `executable_file` is a valid path to a real file/folder
+        // We do not validate whether "ar.executable_file" is a valid path here
+        // It's better for each isolation controller to deal with it individually, since they need
+        // to account for the edge case (it becoming invalid) anyway
         let isolation_controller: Box<dyn ProcessIsolationController> = match ar.execution_method {
             ExecutionMethod::ContainerizedScript => {
                 Box::new(ContainerizedScriptController::new(ar.executable_file)?)
@@ -38,7 +36,12 @@ impl IsolatedProcessWrapper {
             ExecutionMethod::PythonUnsafe => Box::new(PythonUnsafeController::new(ar.executable_file)?),
         };
 
-        // TODO: Consider if components should auto-start (I think it would help our demo)
+        // If we want to start the process automatically, we can use this code. But it makes testing cold starts hard
+
+        // let process = isolation_controller.boot_process();
+        // if let Err(e) = &process {
+        //    warn!("Could not automatically start the component", e)
+        // }
 
         Ok(Self {
             isolation_controller,
@@ -124,9 +127,8 @@ struct DockerArchiveController {
 
 impl DockerArchiveController {
     pub fn new(docker_tar_file_path: &str) -> Result<Self, WorkerError> {
-        // TODO: Figure out if this will work on windows
-        if cfg!(target_os = "macos") {
-            return Err(WorkerErrorKind::UnsupportedPlatform("macos").into());
+        if !cfg!(target_os = "linux") {
+            return Err(WorkerErrorKind::UnsupportedPlatform("must be linux!").into());
         }
 
         Ok(Self {
@@ -142,28 +144,14 @@ impl ProcessIsolationController for DockerArchiveController {
         let c_in = canonicalize(pipe.component_input_file())?;
         let c_out = canonicalize(pipe.component_output_file())?;
 
-        // We're calling docker run, mounting the input and output pipes, then running the loaded
-        // image with their paths as parameters
-        // TODO: Factor out the "run" logic to docker/mod.rs
-        let docker_subprocess = call_docker_async(&[
-            "run",
-            "-v",
-            &format!("{}:{}", c_in, c_in),
-            "-v",
-            &format!("{}:{}", c_out, c_out),
-            &self.docker_image_tag,
-            &c_in,
-            &c_out,
-        ])?;
+        let container = V9Container::start(pipe, &self.docker_image_tag, &[&c_in, &c_out])?;
 
-        Ok(Box::new(PipedProcessHandle {
-            subprocess: docker_subprocess,
-            pipe,
+        Ok(Box::new(ContainerizedProcessHandle {
+            container,
+            helper_subproccess: None,
         }))
     }
 }
-
-// TODO: Add a drop that gets rid of the loaded docker images after we're done with them
 
 #[derive(Debug)]
 pub struct ContainerizedScriptController {
@@ -172,9 +160,8 @@ pub struct ContainerizedScriptController {
 
 impl ContainerizedScriptController {
     pub fn new(executable_file: String) -> Result<Self, WorkerError> {
-        // TODO: Figure out if this will work on windows
-        if cfg!(target_os = "macos") {
-            return Err(WorkerErrorKind::UnsupportedPlatform("macos").into());
+        if !cfg!(target_os = "linux") {
+            return Err(WorkerErrorKind::UnsupportedPlatform("must be linux!").into());
         }
 
         Ok(Self { executable_file })
@@ -183,36 +170,20 @@ impl ContainerizedScriptController {
 
 impl ProcessIsolationController for ContainerizedScriptController {
     fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
-        let container = get_idle_container()?;
-
-        // Create the folder in the container
-        exec_in_container_sync(&container.docker_container_name, &["mkdir", "-p", CODE_FOLDER])?;
+        let mut container = get_idle_container()?;
 
         // Copy over the files
-        // (Paths that end with `/.` tell docker to copy contents)
-        // TODO: Factor this out to docker/mod.rs
-        let source = format!("{}/.", self.executable_file);
-        call_docker_sync(&[
-            "cp",
-            &source,
-            &format!("{}:{}", container.docker_container_name, CODE_FOLDER),
-        ])?;
+        container.copy_directory_in(&self.executable_file, CODE_FOLDER)?;
 
-        let container_in = container.container_input_pipe_location(&container.pipe)?;
-        let container_out = container.container_output_pipe_location(&container.pipe)?;
-        let docker_subprocess = exec_in_container_async(
-            &container.docker_container_name,
-            &[
-                "bash",
-                &format!("{}/{}", CODE_FOLDER, "start.sh"),
-                &container_in,
-                &container_out,
-            ],
-        )?;
+        let c_in = canonicalize(container.pipe().component_input_file())?;
+        let c_out = canonicalize(container.pipe().component_output_file())?;
 
-        Ok(Box::new(PipedProcessHandle {
-            subprocess: docker_subprocess,
-            pipe: container.pipe,
+        let subprocess =
+            container.exec_async(&["sh", &format!("{}/{}", CODE_FOLDER, "start.sh"), &c_in, &c_out])?;
+
+        Ok(Box::new(ContainerizedProcessHandle {
+            container,
+            helper_subproccess: Some(subprocess),
         }))
     }
 }
@@ -245,6 +216,41 @@ impl Drop for PipedProcessHandle {
             self.subprocess.detach();
 
             warn!("Failed to terminate process {:?}, err {:?}", self.subprocess, e);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ContainerizedProcessHandle {
+    container: V9Container,
+    // When we're running a containerized script, there is a helper subprocess we need to keep around
+    helper_subproccess: Option<Popen>,
+}
+
+impl IsolatedProcessHandle for ContainerizedProcessHandle {
+    fn query_process(&mut self, req: &str) -> Result<String, WorkerError> {
+        // Check if the subprocess has terminated
+        if let Some(exit_status) = self.container.process().poll() {
+            return Err(WorkerErrorKind::SubprocessTerminated(exit_status).into());
+        }
+
+        trace!("Writing {:?} to piped process", req);
+        let resp = self.container.pipe().query(req)?;
+        trace!("Got back {:?} from piped process", resp);
+
+        Ok(resp)
+    }
+}
+
+impl Drop for ContainerizedProcessHandle {
+    fn drop(&mut self) {
+        if let Some(p) = &mut self.helper_subproccess {
+            if let Err(e) = p.terminate() {
+                // Detach so we don't hang waiting for it
+                p.detach();
+
+                warn!("Failed to terminate process {:?}, err {:?}", p, e);
+            }
         }
     }
 }

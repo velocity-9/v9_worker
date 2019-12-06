@@ -10,8 +10,8 @@ use crate::error::{WorkerError, WorkerErrorKind};
 use crate::model::ComponentPath;
 
 // Warning: This method is somewhat complicated, since it needs to deal with async stuff
-// TODO: Consider making this a method on a struct somewhere
-// TODO: Deal with panics bubbling up to this level
+// There should be no state here beyond the handler, so no need for an actual hyper service
+// (We don't want to lock into hyper that hard anyway)
 pub fn global_request_entrypoint(
     handler: Arc<HttpRequestHandler>,
     req: Request<Body>,
@@ -37,9 +37,14 @@ pub fn global_request_entrypoint(
     body_future.map(move |body_result| {
         debug!("body = {:?}", body_result);
 
-        let resp: Response<Body> = body_result
+        let resp = body_result
             // Delegate to the handler to actually deal with this request
-            .and_then(|body| handler.handle(http_verb, &uri, query, body))
+            .and_then(|body| {
+                // NOTE: We cannot handle panics here, since it could leave the handler in an inconsistent state
+                // Better to just bomb out
+                // TODO: Investigate handling panics at a lower level
+                handler.handle(http_verb, &uri, query, body)
+            })
             .unwrap_or_else(|e| {
                 warn!("Forced to convert error {:?} into a http response", e);
                 e.into()
