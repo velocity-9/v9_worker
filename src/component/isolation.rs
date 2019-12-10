@@ -173,7 +173,12 @@ impl ProcessIsolationController for ContainerizedScriptController {
         let mut container = get_idle_container()?;
 
         // Copy over the files
+        let pre_copy = Instant::now();
         container.copy_directory_in(&self.executable_file, CODE_FOLDER)?;
+        debug!(
+            "Copying directory took {} milliseconds",
+            pre_copy.elapsed().as_millis()
+        );
 
         let c_in = canonicalize(container.pipe().component_input_file())?;
         let c_out = canonicalize(container.pipe().component_output_file())?;

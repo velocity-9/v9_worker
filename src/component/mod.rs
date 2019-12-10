@@ -158,40 +158,39 @@ impl ComponentManager {
             })
             .unwrap_or(-1.0);
 
-        // TODO: Make network usage work better
-        let network_usage = self
-            .system
-            .networks()
-            .map(|network_map| {
-                let mut total_packets: f64 = -1.0;
-
-                for network in network_map.values() {
-                    let total_packets_for_device =
-                        self.system.network_stats(&network.name).map(|network_stats| {
-                            network_stats.rx_bytes.as_u64() + network_stats.tx_bytes.as_u64()
-                        });
-
-                    match total_packets_for_device {
-                        Ok(v) => {
-                            if total_packets < 0.0 {
-                                total_packets = 0.0
-                            }
-
-                            total_packets += v as f64;
-                        }
-                        Err(e) => {
-                            warn!("Could not get network stats for device {}: {}", network.name, e)
-                        }
+        // TODO: I believe this returns error rate since bootup. It should only cover the last minute or so
+        let packets_data = self.system.networks().map(|networks| {
+            networks
+                .values()
+                .flat_map(|network| {
+                    let stats = self.system.network_stats(&network.name);
+                    if let Err(e) = &stats {
+                        warn!(
+                            "Could not get network stats for network {}. err: {}",
+                            network.name, e
+                        )
                     }
-                }
+                    stats.ok()
+                })
+                .fold((0, 0), |(total_packets, failed_packets), stats| {
+                    (
+                        total_packets + stats.tx_packets + stats.rx_packets,
+                        failed_packets + stats.tx_errors + stats.rx_errors,
+                    )
+                })
+        });
 
-                total_packets
-            })
-            .map_err(|e| {
-                warn!("Could not get network info: {}", e);
-                e
-            })
-            .unwrap_or(-1.0);
+        let network_usage = match packets_data {
+            Ok((0, _)) => {
+                warn!("Zero packet info available!");
+                -1.0
+            }
+            Ok((total_packets, failed_packets)) => failed_packets as f64 / total_packets as f64,
+            Err(e) => {
+                warn!("Could not get network usage {}", e);
+                -1.0
+            }
+        };
 
         let active_components = self
             .active_components
