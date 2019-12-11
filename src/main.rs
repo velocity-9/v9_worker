@@ -38,6 +38,8 @@ use crate::request_handler::HttpRequestHandler;
 const HEARTBEAT_PERIODICITY: Duration = Duration::from_secs(1);
 
 fn main() {
+    // TODO: Graceful shutdown on control-c / API call would be good
+
     // Initialize logging
     let log_spec = "debug, hyper=info, mio=info, tokio_reactor=info, tokio_threadpool=info";
     flexi_logger::Logger::with_str(log_spec).start().unwrap();

@@ -137,19 +137,60 @@ impl ComponentManager {
 
     pub fn status(&self) -> StatusResponse {
         debug!("Processing status request by looking up system averages...");
-        let cpu_usage = f64::from(
-            self.system
-                .load_average()
-                .map(|avg| avg.one / 100.0)
-                .unwrap_or(-1.0),
-        );
+
+        let cpu_usage = self
+            .system
+            .load_average()
+            .map(|avg| f64::from(avg.one) / 100.0)
+            .map_err(|e| {
+                warn!("Could not get cpu usage {}", e);
+                e
+            })
+            .unwrap_or(-1.0);
+
         let memory_usage = self
             .system
             .memory()
             .map(|mem| 1.0 - mem.free.as_u64() as f64 / mem.total.as_u64() as f64)
+            .map_err(|e| {
+                warn!("Could not get memory usage {}", e);
+                e
+            })
             .unwrap_or(-1.0);
-        // TODO: Actually implement network usage
-        let network_usage = -1.0;
+
+        // TODO: I believe this returns error rate since bootup. It should only cover the last minute or so
+        let packets_data = self.system.networks().map(|networks| {
+            networks
+                .values()
+                .flat_map(|network| {
+                    let stats = self.system.network_stats(&network.name);
+                    if let Err(e) = &stats {
+                        warn!(
+                            "Could not get network stats for network {}. err: {}",
+                            network.name, e
+                        )
+                    }
+                    stats.ok()
+                })
+                .fold((0, 0), |(total_packets, failed_packets), stats| {
+                    (
+                        total_packets + stats.tx_packets + stats.rx_packets,
+                        failed_packets + stats.tx_errors + stats.rx_errors,
+                    )
+                })
+        });
+
+        let network_usage = match packets_data {
+            Ok((0, _)) => {
+                warn!("Zero packet info available!");
+                -1.0
+            }
+            Ok((total_packets, failed_packets)) => failed_packets as f64 / total_packets as f64,
+            Err(e) => {
+                warn!("Could not get network usage {}", e);
+                -1.0
+            }
+        };
 
         let active_components = self
             .active_components
