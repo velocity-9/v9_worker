@@ -159,7 +159,7 @@ impl Into<Response<Body>> for WorkerError {
                 .body(Body::from(""))
                 .unwrap(),
 
-            // Otherwise a 500 response is fine
+            // Otherwise a 543 response is what the spec demands
             _ => Response::builder()
                 .status(543)
                 .body(Body::from(self.to_string()))

@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 
 use crate::component::ComponentManager;
 use crate::error::{WorkerError, WorkerErrorKind};
-use crate::model::ComponentPath;
+use crate::model::{ComponentPath, StatusColor};
 
 // Warning: This method is somewhat complicated, since it needs to deal with async stuff
 // There should be no state here beyond the handler, so no need for an actual hyper service
@@ -69,6 +69,7 @@ pub struct HttpRequestHandler {
     serverless_component_manager: RwLock<ComponentManager>,
 }
 
+#[allow(clippy::unused_self)]
 impl HttpRequestHandler {
     pub fn new() -> Self {
         Self {
@@ -113,13 +114,31 @@ impl HttpRequestHandler {
                     Err(WorkerErrorKind::PathNotFound(path_components.join("/")).into())
                 },
                 |component_handle| {
-                    component_handle.lock().handle_component_call(
+                    let mut locked_handle = component_handle.lock();
+                    let call_resp = locked_handle.handle_component_call(
                         method,
                         &http_verb,
                         &path_components[4..],
                         query,
                         body,
-                    )
+                    );
+
+                    let color = match &call_resp {
+                        Ok(resp) => {
+                            if resp.status().is_success() || resp.status().is_redirection() {
+                                StatusColor::Green
+                            } else if resp.status().is_server_error() || resp.status() == 543 {
+                                StatusColor::Red
+                            } else {
+                                // Covers `resp.status().is_client_error()`
+                                StatusColor::Orange
+                            }
+                        }
+                        Err(_) => StatusColor::Red,
+                    };
+                    locked_handle.set_color(color);
+
+                    call_resp
                 },
             );
 
@@ -131,6 +150,7 @@ impl HttpRequestHandler {
         }
     }
 
+    // TODO: Refactor to associated function
     fn handle_meta_request(
         &self,
         component_router: &RwLock<ComponentManager>,

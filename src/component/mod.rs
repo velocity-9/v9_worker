@@ -17,7 +17,7 @@ use crate::error::WorkerError;
 use crate::model::{
     ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, ComponentRequest,
     ComponentResponse, ComponentStatus, DeactivateRequest, DeactivateResponse, DeactivationStatus,
-    StatusResponse,
+    StatusColor, StatusResponse,
 };
 
 pub struct ComponentManager {
@@ -295,6 +295,10 @@ impl ComponentHandle {
             id: self.id.clone(),
             component_stats,
         }
+    }
+
+    pub fn set_color(&mut self, color: StatusColor) {
+        self.stat_tracker.set_color(color)
     }
 
     // The heartbeat function is called periodically
