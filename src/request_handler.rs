@@ -1,7 +1,7 @@
 use std::str;
 use std::sync::Arc;
 
-use hyper::rt::{Future, Stream};
+use futures_util::stream::StreamExt;
 use hyper::{Body, Method, Request, Response, StatusCode, Uri};
 use parking_lot::RwLock;
 
@@ -12,10 +12,10 @@ use crate::model::ComponentPath;
 // Warning: This method is somewhat complicated, since it needs to deal with async stuff
 // There should be no state here beyond the handler, so no need for an actual hyper service
 // (We don't want to lock into hyper that hard anyway)
-pub fn global_request_entrypoint(
+pub async fn global_request_entrypoint(
     handler: Arc<HttpRequestHandler>,
     req: Request<Body>,
-) -> impl Future<Item = Response<Body>, Error = hyper::error::Error> + Send {
+) -> Result<Response<Body>, hyper::error::Error> {
     debug!("{:?}", req);
 
     // Pull the verb, uri, and query stuff out of the request
@@ -25,39 +25,43 @@ pub fn global_request_entrypoint(
     let query = uri.query().unwrap_or("").to_string();
 
     // Then get a future representing the body (this is a future, since hyper may not of received the whole body yet)
-    let body_future = req.into_body().concat2().map(|c| {
-        // Convert the Chunk into a rust "String", wrapping any error in our error type
-        str::from_utf8(&c).map(str::to_owned).map_err(WorkerError::from)
-    });
+    let hyper_body = req.into_body();
+    let body_result = hyper_body
+        .fold(Ok(String::new()), |fold, byte_result| {
+            async {
+                let mut acc = fold?;
+                let bytes = byte_result?;
 
-    // Next we want to an operation on the body. This needs to happen in a future for two reasons
-    // 1) We want to handle many requests at once, so we don't want to block a thread
-    // 2) Hyper literally doesn't let you deal with the body unless you're inside a future context (there is no API to escape this)
-    // Note: We already have a result (body_result) here, since we might get an Utf8 decode error above
-    body_future.map(move |body_result| {
-        debug!("body = {:?}", body_result);
+                let body_part = str::from_utf8(&bytes)?;
+                acc.push_str(body_part);
 
-        let resp = body_result
+                Ok::<String, WorkerError>(acc)
+            }
+        })
+        .await;
+
+    let resp = body_result
+        .and_then(|body| {
+            debug!("body = {:?}", body);
+
             // Delegate to the handler to actually deal with this request
-            .and_then(|body| {
-                // NOTE: We cannot handle panics here, since it could leave the handler in an inconsistent state
-                // Better to just bomb out
-                // TODO: Investigate handling panics at a lower level
-                handler.handle(http_verb, &uri, query, body)
-            })
-            .unwrap_or_else(|e| {
-                warn!("Forced to convert error {:?} into a http response", e);
-                e.into()
-            });
+            // NOTE: We cannot handle panics here, since it could leave the handler in an inconsistent state
+            // Better to just bomb out
+            // TODO: Investigate handling panics at a lower level
+            handler.handle(http_verb, &uri, query, body)
+        })
+        .unwrap_or_else(|e| {
+            warn!("Forced to convert error {:?} into a http response", e);
+            e.into()
+        });
 
-        if resp.status() == StatusCode::INTERNAL_SERVER_ERROR {
-            error!("INTERNAL SERVER ERROR -- {:?}", resp);
-        } else {
-            debug!("{:?}", resp);
-        }
+    if resp.status() == StatusCode::INTERNAL_SERVER_ERROR {
+        error!("INTERNAL SERVER ERROR -- {:?}", resp);
+    } else {
+        debug!("{:?}", resp);
+    }
 
-        resp
-    })
+    Ok(resp)
 }
 
 #[derive(Debug)]
@@ -72,6 +76,7 @@ impl HttpRequestHandler {
         }
     }
 
+    // TODO: Make async and pipe down
     fn handle(
         &self,
         http_verb: Method,
