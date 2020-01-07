@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::error::Error;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -10,10 +11,14 @@ use tokio::spawn;
 const PRODUCTION_PORT: u16 = 80;
 const DEVELOPMENT_PORT: u16 = 8082;
 
-pub fn start_server<S, F>(development_mode: bool, state: Arc<S>, handler: fn(Arc<S>, Request<Body>) -> F)
-where
+pub fn start_server<S, E, F>(
+    development_mode: bool,
+    state: Arc<S>,
+    handler: fn(Arc<S>, Request<Body>) -> F,
+) where
     S: Send + Sync + 'static,
-    F: Future<Output = Result<Response<Body>, hyper::error::Error>> + Send + 'static,
+    E: Error + Send + Sync + 'static,
+    F: Future<Output = Result<Response<Body>, E>> + Send + 'static,
 {
     Runtime::new().expect("Only should be called from main").block_on(async {
         let port = if development_mode {

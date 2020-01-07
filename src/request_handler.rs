@@ -1,9 +1,10 @@
 use std::str;
 use std::sync::Arc;
 
-use futures_util::stream::StreamExt;
 use hyper::{Body, Method, Request, Response, StatusCode, Uri};
 use parking_lot::RwLock;
+use tokio::stream::StreamExt;
+use tokio::task::spawn_blocking;
 
 use crate::component::ComponentManager;
 use crate::error::{WorkerError, WorkerErrorKind};
@@ -15,7 +16,7 @@ use crate::model::{ComponentPath, StatusColor};
 pub async fn global_request_entrypoint(
     handler: Arc<HttpRequestHandler>,
     req: Request<Body>,
-) -> Result<Response<Body>, hyper::error::Error> {
+) -> Result<Response<Body>, WorkerError> {
     debug!("{:?}", req);
 
     // Pull the verb, uri, and query stuff out of the request
@@ -24,36 +25,30 @@ pub async fn global_request_entrypoint(
     let uri = req.uri().clone();
     let query = uri.query().unwrap_or("").to_string();
 
-    // Then get a future representing the body (this is a future, since hyper may not of received the whole body yet)
-    let hyper_body = req.into_body();
-    let body_result = hyper_body
-        .fold(Ok(String::new()), |fold, byte_result| {
-            async {
-                let mut acc = fold?;
-                let bytes = byte_result?;
+    // Get a stream of Bytes representing the body of the request
+    let mut body_stream = req.into_body();
+    // Turn that stream into a concrete String
+    let mut body = String::new();
+    while let Some(chunk) = body_stream.next().await {
+        body.push_str(str::from_utf8(&chunk?)?);
+    }
 
-                let body_part = str::from_utf8(&bytes)?;
-                acc.push_str(body_part);
+    debug!("body = {:?}", body);
 
-                Ok::<String, WorkerError>(acc)
-            }
-        })
-        .await;
-
-    let resp = body_result
-        .and_then(|body| {
-            debug!("body = {:?}", body);
-
-            // Delegate to the handler to actually deal with this request
-            // NOTE: We cannot handle panics here, since it could leave the handler in an inconsistent state
-            // Better to just bomb out
-            // TODO: Investigate handling panics at a lower level
-            handler.handle(http_verb, &uri, query, body)
-        })
-        .unwrap_or_else(|e| {
-            warn!("Forced to convert error {:?} into a http response", e);
-            e.into()
-        });
+    // We want to do the actual handling in a "spawn_blocking" closure, since many operations there can block
+    // This allows us to handle a ton of requests at once, since we're not blocking the executor
+    let resp = spawn_blocking(move || {
+        // Delegate to the handler to actually deal with this request
+        // NOTE: We cannot handle panics here, since it could leave the handler in an inconsistent state
+        // Better to just bomb out
+        // TODO: Investigate handling panics at a lower level
+        handler.handle(http_verb, &uri, query, body)
+    })
+    .await?
+    .unwrap_or_else(|e| {
+        warn!("Forced to convert error {:?} into a http response", e);
+        e.into()
+    });
 
     if resp.status() == StatusCode::INTERNAL_SERVER_ERROR {
         error!("INTERNAL SERVER ERROR -- {:?}", resp);
