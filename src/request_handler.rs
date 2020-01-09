@@ -1,21 +1,22 @@
 use std::str;
 use std::sync::Arc;
 
-use hyper::rt::{Future, Stream};
 use hyper::{Body, Method, Request, Response, StatusCode, Uri};
 use parking_lot::RwLock;
+use tokio::stream::StreamExt;
+use tokio::task::spawn_blocking;
 
 use crate::component::ComponentManager;
 use crate::error::{WorkerError, WorkerErrorKind};
-use crate::model::ComponentPath;
+use crate::model::{ComponentPath, StatusColor};
 
 // Warning: This method is somewhat complicated, since it needs to deal with async stuff
 // There should be no state here beyond the handler, so no need for an actual hyper service
 // (We don't want to lock into hyper that hard anyway)
-pub fn global_request_entrypoint(
+pub async fn global_request_entrypoint(
     handler: Arc<HttpRequestHandler>,
     req: Request<Body>,
-) -> impl Future<Item = Response<Body>, Error = hyper::error::Error> + Send {
+) -> Result<Response<Body>, WorkerError> {
     debug!("{:?}", req);
 
     // Pull the verb, uri, and query stuff out of the request
@@ -24,40 +25,38 @@ pub fn global_request_entrypoint(
     let uri = req.uri().clone();
     let query = uri.query().unwrap_or("").to_string();
 
-    // Then get a future representing the body (this is a future, since hyper may not of received the whole body yet)
-    let body_future = req.into_body().concat2().map(|c| {
-        // Convert the Chunk into a rust "String", wrapping any error in our error type
-        str::from_utf8(&c).map(str::to_owned).map_err(WorkerError::from)
+    // Get a stream of Bytes representing the body of the request
+    let mut body_stream = req.into_body();
+    // Turn that stream into a concrete String
+    let mut body = String::new();
+    while let Some(chunk) = body_stream.next().await {
+        body.push_str(str::from_utf8(&chunk?)?);
+    }
+
+    debug!("body = {:?}", body);
+
+    // We want to do the actual handling in a "spawn_blocking" closure, since many operations there can block
+    // This allows us to handle a ton of requests at once, since we're not blocking the executor
+    let resp = spawn_blocking(move || {
+        // Delegate to the handler to actually deal with this request
+        // NOTE: We cannot handle panics here, since it could leave the handler in an inconsistent state
+        // Better to just bomb out
+        // TODO: Investigate handling panics at a lower level
+        handler.handle(http_verb, &uri, query, body)
+    })
+    .await?
+    .unwrap_or_else(|e| {
+        warn!("Forced to convert error {:?} into a http response", e);
+        e.into()
     });
 
-    // Next we want to an operation on the body. This needs to happen in a future for two reasons
-    // 1) We want to handle many requests at once, so we don't want to block a thread
-    // 2) Hyper literally doesn't let you deal with the body unless you're inside a future context (there is no API to escape this)
-    // Note: We already have a result (body_result) here, since we might get an Utf8 decode error above
-    body_future.map(move |body_result| {
-        debug!("body = {:?}", body_result);
+    if resp.status() == StatusCode::INTERNAL_SERVER_ERROR {
+        error!("INTERNAL SERVER ERROR -- {:?}", resp);
+    } else {
+        debug!("{:?}", resp);
+    }
 
-        let resp = body_result
-            // Delegate to the handler to actually deal with this request
-            .and_then(|body| {
-                // NOTE: We cannot handle panics here, since it could leave the handler in an inconsistent state
-                // Better to just bomb out
-                // TODO: Investigate handling panics at a lower level
-                handler.handle(http_verb, &uri, query, body)
-            })
-            .unwrap_or_else(|e| {
-                warn!("Forced to convert error {:?} into a http response", e);
-                e.into()
-            });
-
-        if resp.status() == StatusCode::INTERNAL_SERVER_ERROR {
-            error!("INTERNAL SERVER ERROR -- {:?}", resp);
-        } else {
-            debug!("{:?}", resp);
-        }
-
-        resp
-    })
+    Ok(resp)
 }
 
 #[derive(Debug)]
@@ -65,6 +64,7 @@ pub struct HttpRequestHandler {
     serverless_component_manager: RwLock<ComponentManager>,
 }
 
+#[allow(clippy::unused_self)]
 impl HttpRequestHandler {
     pub fn new() -> Self {
         Self {
@@ -72,6 +72,7 @@ impl HttpRequestHandler {
         }
     }
 
+    // TODO: Make async and pipe down
     fn handle(
         &self,
         http_verb: Method,
@@ -108,13 +109,31 @@ impl HttpRequestHandler {
                     Err(WorkerErrorKind::PathNotFound(path_components.join("/")).into())
                 },
                 |component_handle| {
-                    component_handle.lock().handle_component_call(
+                    let mut locked_handle = component_handle.lock();
+                    let call_resp = locked_handle.handle_component_call(
                         method,
                         &http_verb,
                         &path_components[4..],
                         query,
                         body,
-                    )
+                    );
+
+                    let color = match &call_resp {
+                        Ok(resp) => {
+                            if resp.status().is_success() || resp.status().is_redirection() {
+                                StatusColor::Green
+                            } else if resp.status().is_server_error() || resp.status() == 543 {
+                                StatusColor::Red
+                            } else {
+                                // Covers `resp.status().is_client_error()`
+                                StatusColor::Orange
+                            }
+                        }
+                        Err(_) => StatusColor::Red,
+                    };
+                    locked_handle.set_color(color);
+
+                    call_resp
                 },
             );
 
@@ -126,6 +145,7 @@ impl HttpRequestHandler {
         }
     }
 
+    // TODO: Refactor to associated function
     fn handle_meta_request(
         &self,
         component_router: &RwLock<ComponentManager>,

@@ -26,6 +26,7 @@ fn sync_create_container() -> Result<V9Container, WorkerError> {
 
     // Unfortunately we can't know when the container is ready, so we blindly sleep for a second
     // Luckily this is usually done in an async context, so it's okay to sleep
+    // TODO: This can take a long time on first go, so add backoff to try twice at 1 sec and 10 sec
     thread::sleep(Duration::from_secs(1));
 
     container.exec_sync(&["mkdir", "-p", CODE_FOLDER])?;

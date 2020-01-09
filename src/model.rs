@@ -79,8 +79,22 @@ pub struct DeactivateResponse {
     pub dbg_message: String,
 }
 
+#[derive(Clone, Copy, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
+pub enum StatusColor {
+    #[serde(rename = "green")]
+    Green,
+    #[serde(rename = "orange")]
+    Orange,
+    #[serde(rename = "red")]
+    Red,
+    #[serde(rename = "grey")]
+    Grey,
+}
+
 #[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]
 pub struct ComponentStats {
+    pub color: StatusColor,
+
     pub stat_window_seconds: f64,
 
     pub hits: f64,

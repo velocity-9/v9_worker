@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::ffi::OsString;
 use std::fmt::{self, Display, Formatter};
 use std::io;
@@ -8,8 +9,9 @@ use std::string::FromUtf8Error;
 use failure::Backtrace;
 use hyper::{Body, Response, StatusCode};
 use subprocess::{ExitStatus, PopenError};
+use tokio::task::JoinError;
 
-#[derive(Debug, Fail)]
+#[derive(Debug)]
 pub struct WorkerError {
     kind: WorkerErrorKind,
     backtrace: Backtrace,
@@ -23,6 +25,8 @@ impl WorkerError {
         }
     }
 }
+
+impl Error for WorkerError {}
 
 impl From<WorkerErrorKind> for WorkerError {
     fn from(kind: WorkerErrorKind) -> Self {
@@ -47,6 +51,7 @@ pub enum WorkerErrorKind {
     Regex(regex::Error),
     SubprocessStart(PopenError),
     SubprocessTerminated(ExitStatus),
+    TokioJoinError(JoinError),
     UnsupportedPlatform(&'static str),
     WrongMethod,
 }
@@ -132,6 +137,10 @@ impl Display for WorkerError {
                 )?;
             }
 
+            WorkerErrorKind::TokioJoinError(e) => {
+                write!(f, "WorkerError, caused by internal tokio join error: {}", e)?;
+            }
+
             WorkerErrorKind::UnsupportedPlatform(plat) => {
                 write!(f, "WorkerError, unsupported platform: {}", plat)?;
             }
@@ -159,7 +168,7 @@ impl Into<Response<Body>> for WorkerError {
                 .body(Body::from(""))
                 .unwrap(),
 
-            // Otherwise a 500 response is fine
+            // Otherwise a 543 response is what the spec demands
             _ => Response::builder()
                 .status(543)
                 .body(Body::from(self.to_string()))
@@ -219,5 +228,11 @@ impl From<regex::Error> for WorkerError {
 impl From<PopenError> for WorkerError {
     fn from(e: PopenError) -> Self {
         WorkerErrorKind::SubprocessStart(e).into()
+    }
+}
+
+impl From<JoinError> for WorkerError {
+    fn from(e: JoinError) -> Self {
+        WorkerErrorKind::TokioJoinError(e).into()
     }
 }

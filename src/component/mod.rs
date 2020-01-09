@@ -17,7 +17,7 @@ use crate::error::WorkerError;
 use crate::model::{
     ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, ComponentRequest,
     ComponentResponse, ComponentStatus, DeactivateRequest, DeactivateResponse, DeactivationStatus,
-    StatusResponse,
+    StatusColor, StatusResponse,
 };
 
 pub struct ComponentManager {
@@ -47,6 +47,8 @@ impl ComponentManager {
     pub fn lookup_component(&self, path: &ComponentPath) -> Option<&Mutex<ComponentHandle>> {
         self.active_components.get(path)
     }
+
+    // TODO: Activate and Deactivate should respect the hash passsed in, instead of blindly deactivating anything
 
     pub fn activate(
         &mut self,
@@ -111,7 +113,7 @@ impl ComponentManager {
             };
         }
 
-        // This is a safe unwrap, since we just checked if activate_request was in an error state
+        // This is a safe unwrap, since we just checked if deactivate_request was in an error state
         let deactivate_request = deactivate_request.unwrap();
 
         if !self.active_components.contains_key(&deactivate_request.id.path) {
@@ -293,6 +295,10 @@ impl ComponentHandle {
             id: self.id.clone(),
             component_stats,
         }
+    }
+
+    pub fn set_color(&mut self, color: StatusColor) {
+        self.stat_tracker.set_color(color)
     }
 
     // The heartbeat function is called periodically

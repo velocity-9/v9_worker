@@ -1,13 +1,14 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::model::ComponentStats;
+use crate::model::{ComponentStats, StatusColor};
 
 const DEFAULT_STAT_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug)]
 pub struct StatTracker {
     stat_window: Duration,
+    current_color: StatusColor,
     // Events at the back of the queue are the newest events
     event_deque: VecDeque<StatEvent>,
 }
@@ -23,6 +24,7 @@ impl Default for StatTracker {
     fn default() -> Self {
         Self {
             stat_window: DEFAULT_STAT_WINDOW,
+            current_color: StatusColor::Grey,
             event_deque: VecDeque::new(),
         }
     }
@@ -38,6 +40,8 @@ impl StatTracker {
 
         if self.event_deque.is_empty() {
             ComponentStats {
+                color: self.current_color,
+
                 stat_window_seconds,
 
                 hits,
@@ -60,6 +64,8 @@ impl StatTracker {
                 .sum::<f64>()
                 / hits;
             ComponentStats {
+                color: self.current_color,
+
                 stat_window_seconds,
 
                 hits,
@@ -86,6 +92,10 @@ impl StatTracker {
         while self.event_deque.front().map_or(false, |e| e.at < too_old) {
             self.event_deque.pop_front();
         }
+    }
+
+    pub fn set_color(&mut self, color: StatusColor) {
+        self.current_color = color;
     }
 }
 
