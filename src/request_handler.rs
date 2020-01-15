@@ -85,14 +85,14 @@ impl HttpRequestHandler {
         let path_components: Vec<&str> = uri.path().split('/').skip(1).collect();
         debug!("path = {:?}", path_components);
 
-        if path_components[0] == "meta" && path_components.len() == 2 {
+        if path_components.len() == 2 && path_components[0] == "meta" {
             self.handle_meta_request(
                 &self.serverless_component_manager,
                 http_verb,
                 path_components[1],
                 &body,
             )
-        } else if path_components[0] == "sl" && path_components.len() >= 4 {
+        } else if path_components.len() >= 4 && path_components[0] == "sl"  {
             let component_router = self.serverless_component_manager.read();
 
             debug!("Starting serverless request processing...");
