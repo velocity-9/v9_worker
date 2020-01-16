@@ -4,11 +4,13 @@ use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs::remove_file;
 use std::path::Path;
+use std::sync::Arc;
 
 use rand;
 use regex::Regex;
-use subprocess::{Exec, ExitStatus, Popen, PopenConfig, Redirection};
+use subprocess::{Exec, ExitStatus, Popen, Redirection};
 
+use crate::component::LogPolicy;
 use crate::error::{WorkerError, WorkerErrorKind};
 use crate::fs_utils::canonicalize;
 use crate::named_pipe::NamedPipe;
@@ -25,6 +27,7 @@ fn call_docker_sync<S: AsRef<OsStr> + Debug>(
     let exit_status = docker_res.exit_status;
     let stdout = String::from_utf8(docker_res.stdout)?;
     let stderr = String::from_utf8(docker_res.stderr)?;
+    debug!("Finished calling (sync) docker");
 
     if !exit_status.success() {
         return Err(WorkerErrorKind::Docker(exit_status, stdout, stderr).into());
@@ -32,14 +35,14 @@ fn call_docker_sync<S: AsRef<OsStr> + Debug>(
     Ok((exit_status, stdout, stderr))
 }
 
-fn call_docker_async(docker_args: &[&str]) -> Result<Popen, WorkerError> {
+fn call_docker_async(docker_args: &[&str], log_policy: &Arc<LogPolicy>) -> Result<Popen, WorkerError> {
     debug!("Calling (async) docker {:?}", docker_args);
 
     let mut argv = Vec::with_capacity(docker_args.len() + 1);
     argv.push("docker");
     argv.extend_from_slice(docker_args);
 
-    let mut docker_subprocess = Popen::create(&argv, PopenConfig::default())?;
+    let mut docker_subprocess = Popen::create(&argv, log_policy.get_popen_config()?)?;
     docker_subprocess.detach();
     trace!("Created and detachted async docker process");
 
@@ -63,7 +66,12 @@ fn container_name(image: &str) -> String {
 }
 
 impl V9Container {
-    pub fn start(pipe: NamedPipe, image: &str, image_arguments: &[&str]) -> Result<Self, WorkerError> {
+    pub fn start(
+        pipe: NamedPipe,
+        image: &str,
+        image_arguments: &[&str],
+        log_policy: &Arc<LogPolicy>,
+    ) -> Result<Self, WorkerError> {
         let name = container_name(image);
 
         let c_in = canonicalize(pipe.component_input_file())?;
@@ -82,10 +90,9 @@ impl V9Container {
             &output_mount,
             image,
         ];
-
         docker_args.extend_from_slice(image_arguments);
 
-        let docker_subprocess = call_docker_async(&docker_args)?;
+        let docker_subprocess = call_docker_async(&docker_args, log_policy)?;
 
         Ok(Self {
             named_pipe: pipe,
@@ -108,10 +115,14 @@ impl V9Container {
         call_docker_sync(&docker_args)
     }
 
-    pub fn exec_async(&self, command: &[&str]) -> Result<Popen, WorkerError> {
+    pub fn exec_async(
+        &self,
+        command: &[&str],
+        log_policy: &Arc<LogPolicy>,
+    ) -> Result<Popen, WorkerError> {
         let mut docker_args = vec!["exec", &self.docker_container_name];
         docker_args.extend_from_slice(command);
-        call_docker_async(&docker_args)
+        call_docker_async(&docker_args, log_policy)
     }
 
     pub fn copy_directory_in(&self, source_dir: &str, target_dir: &str) -> Result<(), WorkerError> {

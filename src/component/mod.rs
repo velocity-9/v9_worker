@@ -1,4 +1,5 @@
 mod isolation;
+mod logs;
 mod stats;
 
 use std::collections::HashMap;
@@ -12,13 +13,16 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC
 use systemstat::{Platform, System};
 
 use crate::component::isolation::IsolatedProcessWrapper;
+use crate::component::logs::LogTracker;
 use crate::component::stats::StatTracker;
 use crate::error::WorkerError;
 use crate::model::{
-    ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentPath, ComponentRequest,
-    ComponentResponse, ComponentStatus, DeactivateRequest, DeactivateResponse, DeactivationStatus,
-    StatusColor, StatusResponse,
+    ActivateRequest, ActivateResponse, ActivationStatus, ComponentId, ComponentLog, ComponentPath,
+    ComponentRequest, ComponentResponse, ComponentStatus, DeactivateRequest, DeactivateResponse,
+    DeactivationStatus, LogResponse, StatusColor, StatusResponse,
 };
+
+pub use crate::component::logs::LogPolicy;
 
 pub struct ComponentManager {
     system: System,
@@ -90,6 +94,7 @@ impl ComponentManager {
             Mutex::new(ComponentHandle {
                 id: activate_request.id.clone(),
                 component_process_wrapper: isolated_process_wrapper,
+                log_tracker: LogTracker::new(),
                 stat_tracker: StatTracker::default(),
             }),
         );
@@ -135,6 +140,19 @@ impl ComponentManager {
             result: DeactivationStatus::DeactivationSuccessful,
             dbg_message: "deactivation succesful".to_string(),
         }
+    }
+
+    pub fn logs(&self) -> LogResponse {
+        let logs = self
+            .active_components
+            .values()
+            .map(|component| {
+                let mut locked_component = component.lock();
+                locked_component.get_component_log()
+            })
+            .collect();
+
+        LogResponse { logs }
     }
 
     pub fn status(&self) -> StatusResponse {
@@ -224,8 +242,11 @@ impl ComponentManager {
 #[derive(Debug)]
 pub struct ComponentHandle {
     id: ComponentId,
-    stat_tracker: StatTracker,
+
     component_process_wrapper: IsolatedProcessWrapper,
+
+    log_tracker: LogTracker,
+    stat_tracker: StatTracker,
 }
 
 impl ComponentHandle {
@@ -257,7 +278,7 @@ impl ComponentHandle {
 
         let encoded_response = self
             .component_process_wrapper
-            .query_process(&encoded_request.to_string())?;
+            .query_process(&encoded_request.to_string(), &mut self.log_tracker)?;
         let serialized_response = percent_decode_str(&encoded_response).decode_utf8()?.to_string();
         let response: ComponentResponse = serde_json::from_str(&serialized_response)?;
 
@@ -294,6 +315,41 @@ impl ComponentHandle {
         ComponentStatus {
             id: self.id.clone(),
             component_stats,
+        }
+    }
+
+    pub fn get_component_log(&mut self) -> ComponentLog {
+        let log = self.log_tracker.get_contents();
+
+        match log {
+            Ok(Some((dedup_number, log))) => ComponentLog {
+                id: self.id.clone(),
+
+                dedup_number: Some(dedup_number),
+                log: Some(log),
+
+                error: None,
+            },
+            Ok(None) => ComponentLog {
+                id: self.id.clone(),
+
+                dedup_number: None,
+                log: None,
+
+                error: None,
+            },
+            Err(e) => {
+                let err_msg = format!("Failure to get logs for component {:?}, err {}", self, e);
+                warn!("{}", err_msg);
+                ComponentLog {
+                    id: self.id.clone(),
+
+                    dedup_number: None,
+                    log: None,
+
+                    error: Some(err_msg),
+                }
+            }
         }
     }
 

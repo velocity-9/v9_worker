@@ -79,6 +79,21 @@ pub struct DeactivateResponse {
     pub dbg_message: String,
 }
 
+#[derive(Clone, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
+pub struct ComponentLog {
+    pub id: ComponentId,
+
+    pub dedup_number: Option<u64>,
+    pub log: Option<String>,
+
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
+pub struct LogResponse {
+    pub logs: Vec<ComponentLog>,
+}
+
 #[derive(Clone, Copy, Deserialize, Debug, Eq, Hash, PartialEq, Serialize)]
 pub enum StatusColor {
     #[serde(rename = "green")]
