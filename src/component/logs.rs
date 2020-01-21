@@ -42,12 +42,15 @@ impl LogTracker {
         Ok(associated_policy)
     }
 
-    pub fn get_contents(&mut self) -> Result<Option<(u64, String)>, WorkerError> {
-        Ok(if self.policy_handle.is_ignore() {
-            None
-        } else {
-            Some((self.dedup_number, self.policy_handle.get_contents()?))
-        })
+    pub fn get_contents(&mut self) -> (u64, Result<Option<String>, WorkerError>) {
+        (
+            self.dedup_number,
+            if self.policy_handle.is_ignore() {
+                Ok(None)
+            } else {
+                self.policy_handle.get_contents().map(Some)
+            },
+        )
     }
 }
 
@@ -85,11 +88,13 @@ impl LogPolicy {
     pub fn get_popen_config(&self) -> Result<PopenConfig, WorkerError> {
         Ok(match self {
             Self::ToFile(temp_file) => PopenConfig {
+                detached: true,
                 stdout: Redirection::File(temp_file.as_file().try_clone()?),
                 stderr: Redirection::File(temp_file.as_file().try_clone()?),
                 ..PopenConfig::default()
             },
             Self::Ignore => PopenConfig {
+                detached: true,
                 stdout: Redirection::Pipe,
                 stderr: Redirection::Pipe,
                 ..PopenConfig::default()

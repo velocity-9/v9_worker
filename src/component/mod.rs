@@ -319,22 +319,21 @@ impl ComponentHandle {
     }
 
     pub fn get_component_log(&mut self) -> ComponentLog {
-        let log = self.log_tracker.get_contents();
+        let (dedup_number, log) = self.log_tracker.get_contents();
 
         match log {
-            Ok(Some((dedup_number, log))) => ComponentLog {
-                id: self.id.clone(),
-
-                dedup_number: Some(dedup_number),
-                log: Some(log),
-
-                error: None,
-            },
             Ok(None) => ComponentLog {
                 id: self.id.clone(),
 
-                dedup_number: None,
+                dedup_number,
                 log: None,
+                error: None,
+            },
+            Ok(Some(log)) => ComponentLog {
+                id: self.id.clone(),
+
+                dedup_number,
+                log: Some(log),
 
                 error: None,
             },
@@ -344,7 +343,7 @@ impl ComponentHandle {
                 ComponentLog {
                     id: self.id.clone(),
 
-                    dedup_number: None,
+                    dedup_number,
                     log: None,
 
                     error: Some(err_msg),

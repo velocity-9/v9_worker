@@ -83,7 +83,7 @@ pub struct DeactivateResponse {
 pub struct ComponentLog {
     pub id: ComponentId,
 
-    pub dedup_number: Option<u64>,
+    pub dedup_number: u64,
     pub log: Option<String>,
 
     pub error: Option<String>,
