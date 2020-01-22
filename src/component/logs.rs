@@ -21,7 +21,7 @@ impl LogTracker {
     pub fn new() -> Self {
         Self {
             dedup_number: DEDUP_COUNTER.fetch_add(1, Ordering::SeqCst),
-            policy_handle: LogPolicy::new_no_op_policy(),
+            policy_handle: LogPolicy::new_ignore_policy(),
         }
     }
 
@@ -43,14 +43,7 @@ impl LogTracker {
     }
 
     pub fn get_contents(&mut self) -> (u64, Result<Option<String>, WorkerError>) {
-        (
-            self.dedup_number,
-            if self.policy_handle.is_ignore() {
-                Ok(None)
-            } else {
-                self.policy_handle.get_contents().map(Some)
-            },
-        )
+        (self.dedup_number, self.policy_handle.get_contents())
     }
 }
 
@@ -63,26 +56,24 @@ pub enum LogPolicy {
 }
 
 impl LogPolicy {
-    pub fn new_no_op_policy() -> Arc<Self> {
+    pub fn new_ignore_policy() -> Arc<Self> {
         Arc::new(Self::Ignore)
     }
 
-    fn is_ignore(&self) -> bool {
-        if let Self::Ignore = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn get_contents(&self) -> Result<String, WorkerError> {
-        match self {
+    pub fn get_contents(&self) -> Result<Option<String>, WorkerError> {
+        Ok(match self {
             Self::ToFile(f) => {
+                f.as_file().sync_all()?;
+
                 // We don't use the internal `File`, since that may have a cursor in any location
-                Ok(read_to_string(f.path())?)
+                let path = f.path();
+                let logs = read_to_string(path)?;
+                debug!("Getting logs from {:?}, contents {:?}", path, logs);
+
+                Some(logs)
             }
-            Self::Ignore => Ok(String::new()),
-        }
+            Self::Ignore => None,
+        })
     }
 
     pub fn get_popen_config(&self) -> Result<PopenConfig, WorkerError> {

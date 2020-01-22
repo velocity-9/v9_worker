@@ -322,19 +322,11 @@ impl ComponentHandle {
         let (dedup_number, log) = self.log_tracker.get_contents();
 
         match log {
-            Ok(None) => ComponentLog {
+            Ok(log) => ComponentLog {
                 id: self.id.clone(),
 
                 dedup_number,
-                log: None,
-                error: None,
-            },
-            Ok(Some(log)) => ComponentLog {
-                id: self.id.clone(),
-
-                dedup_number,
-                log: Some(log),
-
+                log,
                 error: None,
             },
             Err(e) => {

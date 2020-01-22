@@ -27,7 +27,7 @@ fn sync_create_container() -> Result<V9Container, WorkerError> {
         pipe,
         CONTAINER_IMAGE_TAG,
         &["sleep", SLEEP_TIME],
-        &LogPolicy::new_no_op_policy(),
+        &LogPolicy::new_ignore_policy(),
     )?;
 
     // Unfortunately we can't know when the container is ready, so we blindly sleep for a second
