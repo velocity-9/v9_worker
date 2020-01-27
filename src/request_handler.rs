@@ -85,14 +85,14 @@ impl HttpRequestHandler {
         let path_components: Vec<&str> = uri.path().split('/').skip(1).collect();
         debug!("path = {:?}", path_components);
 
-        if path_components[0] == "meta" && path_components.len() == 2 {
+        if path_components.len() == 2 && path_components[0] == "meta" {
             self.handle_meta_request(
                 &self.serverless_component_manager,
                 http_verb,
                 path_components[1],
                 &body,
             )
-        } else if path_components[0] == "sl" && path_components.len() >= 4 {
+        } else if path_components.len() >= 4 && path_components[0] == "sl" {
             let component_router = self.serverless_component_manager.read();
 
             debug!("Starting serverless request processing...");
@@ -148,26 +148,30 @@ impl HttpRequestHandler {
     // TODO: Refactor to associated function
     fn handle_meta_request(
         &self,
-        component_router: &RwLock<ComponentManager>,
+        component_manager: &RwLock<ComponentManager>,
         http_verb: Method,
         route: &str,
         body: &str,
     ) -> Result<Response<Body>, WorkerError> {
         let result_body = Body::from(match (route, http_verb) {
             ("activate", Method::POST) => {
-                let resp = component_router.write().activate(serde_json::from_str(body));
+                let resp = component_manager.write().activate(serde_json::from_str(body));
                 serde_json::to_string(&resp)?
             }
             ("deactivate", Method::POST) => {
-                let resp = component_router.write().deactivate(serde_json::from_str(body));
+                let resp = component_manager.write().deactivate(serde_json::from_str(body));
+                serde_json::to_string(&resp)?
+            }
+            ("logs", Method::GET) => {
+                let resp = component_manager.write().logs();
                 serde_json::to_string(&resp)?
             }
             ("status", Method::GET) => {
-                let resp = component_router.read().status();
+                let resp = component_manager.read().status();
                 serde_json::to_string(&resp)?
             }
 
-            ("activate", _) | ("deactivate", _) | ("status", _) => {
+            ("activate", _) | ("deactivate", _) | ("logs", _) | ("status", _) => {
                 return Err(WorkerErrorKind::WrongMethod.into())
             }
             _ => return Err(WorkerErrorKind::PathNotFound("meta/".to_string() + route).into()),

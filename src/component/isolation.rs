@@ -1,8 +1,10 @@
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use subprocess::{Popen, PopenConfig};
+use subprocess::Popen;
 
+use crate::component::logs::{LogPolicy, LogTracker};
 use crate::docker::idle_container_creator::{get_idle_container, CODE_FOLDER};
 use crate::docker::{load_docker_image, V9Container};
 use crate::error::{WorkerError, WorkerErrorKind};
@@ -51,11 +53,16 @@ impl IsolatedProcessWrapper {
         })
     }
 
-    pub fn query_process(&mut self, req: &str) -> Result<String, WorkerError> {
+    pub fn query_process(
+        &mut self,
+        req: &str,
+        log_tracker: &mut LogTracker,
+    ) -> Result<String, WorkerError> {
         self.last_accessed = Instant::now();
 
         if self.process_handle.is_none() {
-            self.process_handle = Some(self.isolation_controller.boot_process()?)
+            let log_policy = log_tracker.create_associated_policy()?;
+            self.process_handle = Some(self.isolation_controller.boot_process(log_policy)?)
         }
 
         // This is a safe unwrap, since we just ensured we have a booted proccess
@@ -86,7 +93,10 @@ impl IsolatedProcessWrapper {
 }
 
 pub trait ProcessIsolationController: Debug + Send {
-    fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError>;
+    fn boot_process(
+        &self,
+        log_policy: Arc<LogPolicy>,
+    ) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError>;
 }
 
 pub trait IsolatedProcessHandle: Debug + Send {
@@ -105,7 +115,10 @@ impl PythonUnsafeController {
 }
 
 impl ProcessIsolationController for PythonUnsafeController {
-    fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
+    fn boot_process(
+        &self,
+        log_policy: Arc<LogPolicy>,
+    ) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
         let pipe = NamedPipe::new()?;
 
         let c_in = canonicalize(pipe.component_input_file())?;
@@ -113,7 +126,7 @@ impl ProcessIsolationController for PythonUnsafeController {
 
         let subprocess = Popen::create(
             &["python3", "-u", &self.executable_file, &c_in, &c_out],
-            PopenConfig::default(),
+            log_policy.get_popen_config()?,
         )?;
 
         Ok(Box::new(PipedProcessHandle { subprocess, pipe }))
@@ -138,13 +151,16 @@ impl DockerArchiveController {
 }
 
 impl ProcessIsolationController for DockerArchiveController {
-    fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
+    fn boot_process(
+        &self,
+        log_policy: Arc<LogPolicy>,
+    ) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
         let pipe = NamedPipe::new()?;
 
         let c_in = canonicalize(pipe.component_input_file())?;
         let c_out = canonicalize(pipe.component_output_file())?;
 
-        let container = V9Container::start(pipe, &self.docker_image_tag, &[&c_in, &c_out])?;
+        let container = V9Container::start(pipe, &self.docker_image_tag, &[&c_in, &c_out], &log_policy)?;
 
         Ok(Box::new(ContainerizedProcessHandle {
             container,
@@ -169,7 +185,10 @@ impl ContainerizedScriptController {
 }
 
 impl ProcessIsolationController for ContainerizedScriptController {
-    fn boot_process(&self) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
+    fn boot_process(
+        &self,
+        log_policy: Arc<LogPolicy>,
+    ) -> Result<Box<dyn IsolatedProcessHandle>, WorkerError> {
         let mut container = get_idle_container()?;
 
         // Copy over the files
@@ -183,8 +202,10 @@ impl ProcessIsolationController for ContainerizedScriptController {
         let c_in = canonicalize(container.pipe().component_input_file())?;
         let c_out = canonicalize(container.pipe().component_output_file())?;
 
-        let subprocess =
-            container.exec_async(&["sh", &format!("{}/{}", CODE_FOLDER, "start.sh"), &c_in, &c_out])?;
+        let subprocess = container.exec_async(
+            &["sh", &format!("{}/{}", CODE_FOLDER, "start.sh"), &c_in, &c_out],
+            &log_policy,
+        )?;
 
         Ok(Box::new(ContainerizedProcessHandle {
             container,

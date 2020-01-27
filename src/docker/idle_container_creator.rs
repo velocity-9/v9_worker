@@ -5,6 +5,7 @@ use std::time::Duration;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 
+use crate::component::LogPolicy;
 use crate::docker::V9Container;
 use crate::error::WorkerError;
 use crate::named_pipe::NamedPipe;
@@ -22,7 +23,12 @@ const SLEEP_TIME: &str = "1000000000";
 
 fn sync_create_container() -> Result<V9Container, WorkerError> {
     let pipe = NamedPipe::new()?;
-    let container = V9Container::start(pipe, CONTAINER_IMAGE_TAG, &["sleep", SLEEP_TIME])?;
+    let container = V9Container::start(
+        pipe,
+        CONTAINER_IMAGE_TAG,
+        &["sleep", SLEEP_TIME],
+        &LogPolicy::new_ignore_policy(),
+    )?;
 
     // Unfortunately we can't know when the container is ready, so we blindly sleep for a second
     // Luckily this is usually done in an async context, so it's okay to sleep

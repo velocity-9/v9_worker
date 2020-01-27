@@ -11,6 +11,8 @@ use hyper::{Body, Response, StatusCode};
 use subprocess::{ExitStatus, PopenError};
 use tokio::task::JoinError;
 
+// TODO: Add `type WorkerResult<V> = Result<V, WorkerError>`, and use that everywhere
+
 #[derive(Debug)]
 pub struct WorkerError {
     kind: WorkerErrorKind,
