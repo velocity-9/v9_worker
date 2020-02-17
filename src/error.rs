@@ -159,9 +159,11 @@ impl Into<Response<Body>> for WorkerError {
     fn into(self) -> Response<Body> {
         match &self.kind {
             // Special case the "PathNotFound" error, since it maps cleanly to a 404
+            // IMPORTANT: The 404 message here is part of our API
+            // DO NOT CHANGE without modifying the router
             WorkerErrorKind::PathNotFound(_) => Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from(""))
+                .body(Body::from("v9: worker 404"))
                 .unwrap(),
 
             // Also special case the "WrongMethodError" error since it maps cleanly to a 405
